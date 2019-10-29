@@ -1,11 +1,14 @@
 
-import click
-from pathlib import Path
-from xml.etree import ElementTree as e3
-import typing
-from urllib.parse import quote
 import contextlib
+import typing
+from pathlib import Path
+from urllib.parse import quote
+from xml.etree import ElementTree as e3
+
+import click
 import yaml
+from charset_normalizer import detect as detect_encoding
+
 
 
 file_types = {
@@ -16,6 +19,32 @@ file_types = {
     'wav': 'audio/vnd.wave',
     'mp4': 'audio/mp4',
 }
+
+image_types = {
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+}
+
+info_file_masks = [
+    'readme.*',
+    'Readme.*',
+    'README.*',
+    'info.*',
+    'Info.*',
+    'INFO.*',
+    'about.*',
+    'About.*',
+    'ABOUT.*',
+    '*.txt',
+    '*.TXT',
+    '*.md',
+    '*.MD',
+    '*.info',
+    '*.INFO',
+    '*.rst',
+    '*.RST',
+]
 
 LOCAL_SETTINGS_FILENAME = '.abooker'
 
@@ -66,14 +95,14 @@ def make_rss(
 
 def load_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, errors='strict') -> dict:
     with contextlib.suppress(*(errors == 'ignore' and [Exception] or [])):
-        with open(path.joinpath(filename)) as f:
+        with path.joinpath(filename).open() as f:
             data = yaml.safe_load(f)
             return data
 
 
 def save_settings(settings: dict, path: Path, errors='strict'):
     with contextlib.suppress(*(errors == 'ignore' and [Exception] or [])):
-        with open(path, 'w') as f:
+        with path.open('w') as f:
             yaml.dump(settings, f, allow_unicode=True, encoding='utf-8', indent=2)
 
 
@@ -104,12 +133,28 @@ def main(
     if lang:
         settings['lang'] = lang
 
+    if not image:
+        pics = [f for t in image_types for f in path.rglob(f'*.{t}')]
+        if pics:
+            image = str(pics[0].relative_to(path.parent))
+
+    if image:
+        if not image.startswith('http'):
+            image = f'{url.rstrip("/")}/{image}'
+
+    if not description:
+        descr_files = [f for t in info_file_masks for f in path.rglob(t)]
+        if descr_files:
+            with descr_files[0].open('rb') as f:
+                raw_description = f.read()
+            descr_encoding = detect_encoding(raw_description)['encoding']
+            if descr_encoding:
+                description = raw_description.decode(descr_encoding)
+
     click.echo(f'Processing path: {path} -> {url}\n')
 
     files = [f for t in file_types for f in path.rglob(f'*.{t}')]
     files.sort()  # TODO: numeric/alphabetic sort
-
-    url = url.rstrip('/')
     items = []
     for p in files:
         rpath = p.relative_to(path.parent)
