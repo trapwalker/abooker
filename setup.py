@@ -20,5 +20,6 @@ setup(
         "click",
         "pathlib",
         "pyyaml",
+        "charset_normalizer",
     ],
 )
