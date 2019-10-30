@@ -107,7 +107,7 @@ def save_settings(settings: dict, path: Path, errors='strict'):
 
 
 @click.command()
-@click.option('-d', '--dir', 'path', type=click.Path(file_okay=False, resolve_path=True), default='.')
+@click.option('-d', '--dir', 'path', type=click.Path(file_okay=False, resolve_path=True), required=True)
 @click.option('-u', '--url', type=str)
 @click.option('--rss', type=str, default='playlist.rss')
 @click.option('--title', type=str)
