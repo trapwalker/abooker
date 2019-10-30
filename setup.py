@@ -22,4 +22,5 @@ setup(
         "pyyaml",
         "charset_normalizer",
     ],
+    entry_points={"console_scripts": 'abooker=abooker:main'},
 )
