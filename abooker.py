@@ -4,11 +4,11 @@ import typing
 from pathlib import Path
 from urllib.parse import quote
 from xml.etree import ElementTree as e3
+from itertools import chain
 
 import click
 import yaml
 from charset_normalizer import detect as detect_encoding
-
 
 
 file_types = {
@@ -155,7 +155,11 @@ def main(
     if verbose:
         click.echo(f'Processing path: {path} -> {url}\n')
 
-    files = [f for t in file_types for f in path.rglob(f'*.{t}')]
+    files = [
+        f
+        for t in chain(file_types, map(str.upper, file_types))
+        for f in path.rglob(f'*.{t}')
+    ]
     files.sort()  # TODO: numeric/alphabetic sort
     items = []
     for p in files:
