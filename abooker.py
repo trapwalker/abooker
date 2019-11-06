@@ -29,22 +29,12 @@ image_types = {
 
 info_file_masks = [
     'readme.*',
-    'Readme.*',
-    'README.*',
     'info.*',
-    'Info.*',
-    'INFO.*',
     'about.*',
-    'About.*',
-    'ABOUT.*',
     '*.txt',
-    '*.TXT',
     '*.md',
-    '*.MD',
     '*.info',
-    '*.INFO',
     '*.rst',
-    '*.RST',
 ]
 
 LOCAL_SETTINGS_FILENAME = '.abooker'
@@ -155,7 +145,7 @@ def main(
             image = f'{url.rstrip("/")}/{image}'
 
     if not description:
-        descr_files = [f for t in info_file_masks for f in path.rglob(t)]
+        descr_files = [f for t in info_file_masks for f in path.rglob(mask_case_fix(t))]
         if descr_files:
             with descr_files[0].open('rb') as f:
                 raw_description = f.read()
