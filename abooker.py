@@ -29,8 +29,11 @@ image_types = {
 
 info_file_masks = [
     'readme.*',
+    'readme',
     'info.*',
+    'info',
     'about.*',
+    'about',
     '*.txt',
     '*.md',
     '*.info',
