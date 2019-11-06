@@ -117,9 +117,10 @@ def save_settings(settings: dict, path: Path, errors='strict'):
 @click.option('--lang', type=str)
 @click.option('--link', type=str)
 @click.option('--no-local-settings', is_flag=True)
+@click.option('--verbose', is_flag=True)
 def main(
     path: str, url: str, rss: str, title: str, author: str, description: str, image: str, lang: str, link: str,
-    no_local_settings: bool,
+    no_local_settings: bool, verbose: bool,
 ):
     path: Path = Path(path)
 
@@ -151,7 +152,8 @@ def main(
             if descr_encoding:
                 description = raw_description.decode(descr_encoding)
 
-    click.echo(f'Processing path: {path} -> {url}\n')
+    if verbose:
+        click.echo(f'Processing path: {path} -> {url}\n')
 
     files = [f for t in file_types for f in path.rglob(f'*.{t}')]
     files.sort()  # TODO: numeric/alphabetic sort
@@ -164,7 +166,8 @@ def main(
             url=f'{url.rstrip("/")}/{quote(str(rpath))}',
         )
         items.append(item)
-        click.echo(f'{rpath}:: {item["url"]}')
+        if verbose:
+            click.echo(f'{rpath}:: {item["url"]}')
 
     if rss:
         rss_xml = make_rss(
@@ -172,7 +175,10 @@ def main(
             title=title or path.name,
             author=author, description=description, image=image, lang=lang, link=link,
         )
-        e3.ElementTree(rss_xml).write(path.joinpath(rss), encoding='utf-8', xml_declaration=True)
+        rss_path = path.joinpath(rss)
+        rss_url = f'{url.rstrip("/")}/{quote(str(rss_path.relative_to(path.parent)))}'
+        e3.ElementTree(rss_xml).write(rss_path, encoding='utf-8', xml_declaration=True)
+        click.echo(f'RSS: {rss_url}')
 
     if not no_local_settings:
         save_settings(settings, path=path.parent.joinpath(LOCAL_SETTINGS_FILENAME), errors='ignore')
