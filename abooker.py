@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import quote
 from xml.etree import ElementTree as e3
 from itertools import chain
+import string
 
 import click
 import yaml
@@ -47,6 +48,15 @@ info_file_masks = [
 ]
 
 LOCAL_SETTINGS_FILENAME = '.abooker'
+
+
+def mask_case_fix(mask: str) -> str:
+    return ''.join(
+        f'[{c.lower()}{c.upper()}]'
+        if c.isalpha() else
+        c
+        for c in mask
+    )
 
 
 def make_rss(
@@ -158,12 +168,13 @@ def main(
 
     files = [
         f
-        for t in chain(file_types, map(str.upper, file_types))
-        for f in path.rglob(f'*.{t}')
+        for t in file_types
+        for f in path.rglob(mask_case_fix(f'*.{t}'))
     ]
+    files = [(str(f).lower(), f) for f in files]
     files.sort()  # TODO: numeric/alphabetic sort
     items = []
-    for p in files:
+    for k, p in files:
         rpath = p.relative_to(path.parent)
         item = dict(
             path=p,
