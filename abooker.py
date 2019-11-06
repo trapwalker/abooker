@@ -146,7 +146,7 @@ def main(
         settings['lang'] = lang
 
     if not image:
-        pics = [f for t in image_types for f in path.rglob(f'*.{t}')]
+        pics = [f for t in image_types for f in path.rglob(mask_case_fix(f'*.{t}'))]
         if pics:
             image = str(pics[0].relative_to(path.parent))
 
