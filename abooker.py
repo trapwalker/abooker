@@ -70,6 +70,7 @@ def make_rss(
         e3.SubElement(channel, 'description').text = description
     if image:
         e3.SubElement(channel, 'googleplay:image', href=image)
+        e3.SubElement(e3.SubElement(channel, 'image'), 'url').text = image
     if lang:
         e3.SubElement(channel, 'language').text = lang
     if link:
