@@ -122,6 +122,11 @@ def iter_files(
     return (f for m in mask_list for f in glob_method(case_fix(m)))
 
 
+def filename_key(fn: Path) -> typing.Hashable:
+    # TODO: numeric/alphabetic sort
+    return str(fn).lower(),
+
+
 @click.command()
 @click.option('-d', '--dir', 'path', type=click.Path(file_okay=False, resolve_path=True), required=True)
 @click.option('-u', '--url', type=str)
@@ -172,8 +177,8 @@ def main(
         click.echo(f'Processing path: {path} -> {url}\n')
 
     files = iter_files(path, mask_list=media_file_masks)
-    files = [(str(f).lower(), f) for f in files]
-    files.sort()  # TODO: numeric/alphabetic sort
+    files = [(filename_key(f), f) for f in files]
+    files.sort()
     items = []
     for k, p in files:
         rpath = p.relative_to(path.parent)
