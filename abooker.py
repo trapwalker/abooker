@@ -3,7 +3,6 @@ import contextlib
 import typing
 from pathlib import Path
 from urllib.parse import quote
-from xml.etree.ElementTree import ElementTree, Element, SubElement
 
 import click
 import yaml
@@ -57,6 +56,8 @@ def make_rss(
     items: typing.Sequence[typing.Dict[str, typing.Any]],
     title=None, author=None, description=None, image=None, lang=None, link=None,
 ):
+    from xml.etree.ElementTree import ElementTree, Element, SubElement
+
     rss = Element(
         'rss',
         version="2.0",
@@ -95,7 +96,7 @@ def make_rss(
         if duration:
             SubElement(item_node, 'itunes:duration').text = str(duration)
 
-    return rss
+    return ElementTree(rss)
 
 
 def load_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, errors='strict') -> dict:
@@ -205,14 +206,13 @@ def main(
             click.echo(f'{rpath}:: {item["url"]}')
 
     if rss:
-        rss_xml = make_rss(
+        rss_path = path.joinpath(rss)
+        rss_url = f'{url.rstrip("/")}/{quote(str(rss_path.relative_to(path.parent)))}'
+        make_rss(
             items,
             title=title or path.name,
             author=author, description=description, image=image, lang=lang, link=link,
-        )
-        rss_path = path.joinpath(rss)
-        rss_url = f'{url.rstrip("/")}/{quote(str(rss_path.relative_to(path.parent)))}'
-        ElementTree(rss_xml).write(rss_path, encoding='utf-8', xml_declaration=True)
+        ).write(rss_path, encoding='utf-8', xml_declaration=True)
         click.echo(f'RSS: {rss_url}')
 
     if save_local_settings:
