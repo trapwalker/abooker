@@ -138,10 +138,11 @@ def filename_key(fn: Path) -> typing.Hashable:
 @click.option('--lang', type=str)
 @click.option('--link', type=str)
 @click.option('--no-local-settings', is_flag=True)
+@click.option('-S', '--save-local-settings', is_flag=False)
 @click.option('--verbose', is_flag=True)
 def main(
     path: str, url: str, rss: str, title: str, author: str, description: str, image: str, lang: str, link: str,
-    no_local_settings: bool, verbose: bool,
+    no_local_settings: bool, save_local_settings: bool, verbose: bool,
 ):
     path: Path = Path(path)
 
@@ -202,7 +203,7 @@ def main(
         ElementTree(rss_xml).write(rss_path, encoding='utf-8', xml_declaration=True)
         click.echo(f'RSS: {rss_url}')
 
-    if not no_local_settings:
+    if save_local_settings:
         save_settings(settings, path=path.parent.joinpath(LOCAL_SETTINGS_FILENAME), errors='ignore')
 
 
