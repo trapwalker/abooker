@@ -55,8 +55,9 @@ def mask_case_fix(mask: str) -> str:
 def make_rss(
     items: typing.Sequence[typing.Dict[str, typing.Any]],
     title=None, author=None, description=None, image=None, lang=None, link=None,
-):
-    from xml.etree.ElementTree import ElementTree, Element, SubElement
+) -> bytes:
+    from xml.etree.ElementTree import Element, SubElement, tostring
+    from xml.dom import minidom
 
     rss = Element(
         'rss',
@@ -96,7 +97,8 @@ def make_rss(
         if duration:
             SubElement(item_node, 'itunes:duration').text = str(duration)
 
-    return ElementTree(rss)
+    xmlstr = minidom.parseString(tostring(rss, encoding='utf-8')).toprettyxml(indent="  ", encoding='utf-8')
+    return xmlstr
 
 
 def load_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, errors='strict') -> dict:
@@ -208,11 +210,11 @@ def main(
     if rss:
         rss_path = path.joinpath(rss)
         rss_url = f'{url.rstrip("/")}/{quote(str(rss_path.relative_to(path.parent)))}'
-        make_rss(
+        rss_path.write_bytes(make_rss(
             items,
             title=title or path.name,
             author=author, description=description, image=image, lang=lang, link=link,
-        ).write(rss_path, encoding='utf-8', xml_declaration=True)
+        ))
         click.echo(f'RSS: {rss_url}')
 
     if save_local_settings:
