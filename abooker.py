@@ -127,6 +127,18 @@ def filename_key(fn: Path) -> typing.Hashable:
     return str(fn).lower(),
 
 
+def collect_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, defaults: dict = None) -> dict:
+    paths_processed = set()
+    d = dict(defaults)
+    p = path
+    while p and p not in paths_processed:
+        paths_processed.add(p)
+        d.update(load_settings(p, filename=filename, errors='ignore') or {})
+        p = p.parent
+
+    return d
+
+
 @click.command()
 @click.option('-d', '--dir', 'path', type=click.Path(file_okay=False, resolve_path=True), required=True)
 @click.option('-u', '--url', type=str)
