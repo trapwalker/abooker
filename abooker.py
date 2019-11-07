@@ -3,6 +3,7 @@ import contextlib
 import typing
 from pathlib import Path
 from urllib.parse import quote
+import re
 
 import click
 import yaml
@@ -125,9 +126,12 @@ def iter_files(
     return (f for m in mask_list for f in glob_method(case_fix(m)))
 
 
-def filename_key(fn: Path) -> typing.Hashable:
-    # TODO: numeric/alphabetic sort
-    return str(fn).lower(),
+def filename_key(fn: Path, root: Path = None) -> typing.Hashable:
+    def split(s: str, re_splitter=re.compile(r'(\D+|\d+)')) -> tuple:
+        return tuple(int(chunk) if chunk.isdigit() else chunk for chunk in re_splitter.split(s) if chunk)
+
+    rel_path = fn.relative_to(root) if root else fn
+    return tuple(split(name) for name in rel_path.parent.parts) + (split(rel_path.stem) + (rel_path.suffix,),)
 
 
 def collect_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, defaults: dict = None) -> dict:
@@ -193,7 +197,7 @@ def main(
         click.echo(f'Processing path: {path} -> {url}\n')
 
     files = iter_files(path, mask_list=media_file_masks)
-    files = [(filename_key(f), f) for f in files]
+    files = [(filename_key(f, root=path), f) for f in files]
     files.sort()
     items = []
     for k, p in files:
