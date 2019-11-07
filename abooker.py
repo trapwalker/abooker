@@ -112,7 +112,7 @@ def load_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, errors='s
 def save_settings(settings: dict, path: Path, errors='strict'):
     with contextlib.suppress(*(errors == 'ignore' and [Exception] or [])):
         with path.open('w') as f:
-            yaml.dump(settings, f, allow_unicode=True, encoding='utf-8', indent=2)
+            yaml.dump(settings, f, allow_unicode=True, encoding='utf-8', indent=2, default_flow_style=False)
 
 
 def iter_files(
@@ -157,7 +157,7 @@ def collect_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, defaul
 @click.option('--lang', type=str)
 @click.option('--link', type=str)
 @click.option('--no-local-settings', is_flag=True)
-@click.option('-S', '--save-local-settings', is_flag=False)
+@click.option('-S', '--save-local-settings', is_flag=True)
 @click.option('--verbose', is_flag=True)
 def main(
     path: str, url: str, rss: str, title: str, author: str, description: str, image: str, lang: str, link: str,
@@ -166,6 +166,7 @@ def main(
     path: Path = Path(path)
 
     settings = {} if no_local_settings else load_settings(path.parent, errors='ignore') or {}
+    book_settings = load_settings(path, errors='ignore') or {}
 
     url = url or settings.get('url')
     if url:
@@ -174,6 +175,18 @@ def main(
     lang = lang or settings.get('lang')
     if lang:
         settings['lang'] = lang
+
+    title = title or book_settings.get('title')
+    if title:
+        book_settings['title'] = title
+
+    author = author or book_settings.get('author')
+    if author:
+        book_settings['author'] = author
+
+    description = description or book_settings.get('description') or book_settings.get('about')
+    if description:
+        book_settings['description'] = description
 
     if not image:
         pics = list(iter_files(path, mask_list=image_file_masks))
@@ -222,7 +235,9 @@ def main(
         click.echo(f'RSS: {rss_url}')
 
     if save_local_settings:
+        # todo: do not save settings if they was not changed
         save_settings(settings, path=path.parent.joinpath(LOCAL_SETTINGS_FILENAME), errors='ignore')
+        save_settings(book_settings, path=path.joinpath(LOCAL_SETTINGS_FILENAME), errors='ignore')
 
 
 if __name__ == '__main__':
