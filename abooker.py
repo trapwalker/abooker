@@ -3,16 +3,14 @@ import contextlib
 import typing
 from pathlib import Path
 from urllib.parse import quote
-from xml.etree import ElementTree as e3
-from itertools import chain
-import string
+from xml.etree.ElementTree import ElementTree, Element, SubElement
 
 import click
 import yaml
 from charset_normalizer import detect as detect_encoding
 
 
-file_types = {
+media_types = {
     'aac': 'audio/aac',
     'mp3': 'audio/mpeg',
     'ogg': 'audio/ogg',
@@ -27,6 +25,7 @@ image_types = {
     'png': 'image/png',
 }
 
+media_file_masks = [f'*.{t}' for t in media_types]
 image_file_masks = [f'*.{t}' for t in image_types]
 
 info_file_masks = [
@@ -58,7 +57,7 @@ def make_rss(
     items: typing.Sequence[typing.Dict[str, typing.Any]],
     title=None, author=None, description=None, image=None, lang=None, link=None,
 ):
-    rss = e3.Element(
+    rss = Element(
         'rss',
         version="2.0",
         attrib={
@@ -66,35 +65,35 @@ def make_rss(
             "xmlns:itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd",
         },
     )
-    channel = e3.SubElement(rss, 'channel')
+    channel = SubElement(rss, 'channel')
     if title:
-        e3.SubElement(channel, 'title').text = title
+        SubElement(channel, 'title').text = title
     if author:
-        e3.SubElement(channel, 'googleplay:author').text = author
+        SubElement(channel, 'googleplay:author').text = author
     if description:
-        e3.SubElement(channel, 'description').text = description
+        SubElement(channel, 'description').text = description
     if image:
-        e3.SubElement(channel, 'googleplay:image', href=image)
-        e3.SubElement(e3.SubElement(channel, 'image'), 'url').text = image
+        SubElement(channel, 'googleplay:image', href=image)
+        SubElement(SubElement(channel, 'image'), 'url').text = image
     if lang:
-        e3.SubElement(channel, 'language').text = lang
+        SubElement(channel, 'language').text = lang
     if link:
-        e3.SubElement(channel, 'link').text = link
+        SubElement(channel, 'link').text = link
 
     for item in items:
         path: Path = item['path']
         ext = path.suffix.strip('.').lower()
-        mime = item.get('mime') or file_types.get(ext)
+        mime = item.get('mime') or media_types.get(ext)
         enclosure_attrs = dict(url=item['url'])
         if mime:
             enclosure_attrs['type'] = mime
         duration = item.get('duration')
 
-        item_node = e3.SubElement(channel, 'item')
-        e3.SubElement(item_node, 'title').text = item.get('title') or path.name
-        e3.SubElement(item_node, 'enclosure', attrib=enclosure_attrs)
+        item_node = SubElement(channel, 'item')
+        SubElement(item_node, 'title').text = item.get('title') or path.name
+        SubElement(item_node, 'enclosure', attrib=enclosure_attrs)
         if duration:
-            e3.SubElement(item_node, 'itunes:duration').text = str(duration)
+            SubElement(item_node, 'itunes:duration').text = str(duration)
 
     return rss
 
@@ -110,6 +109,17 @@ def save_settings(settings: dict, path: Path, errors='strict'):
     with contextlib.suppress(*(errors == 'ignore' and [Exception] or [])):
         with path.open('w') as f:
             yaml.dump(settings, f, allow_unicode=True, encoding='utf-8', indent=2)
+
+
+def iter_files(
+    path: Path,
+    mask_list: typing.Iterable[str],
+    recursive: bool = True,
+    case_sens=False,
+) -> typing.Iterable[Path]:
+    glob_method = path.rglob if recursive else path.glob
+    case_fix = (lambda s: s) if case_sens else mask_case_fix
+    return (f for m in mask_list for f in glob_method(case_fix(m)))
 
 
 @click.command()
@@ -141,7 +151,7 @@ def main(
         settings['lang'] = lang
 
     if not image:
-        pics = [f for t in image_file_masks for f in path.rglob(mask_case_fix(t))]
+        pics = list(iter_files(path, mask_list=image_file_masks))
         if pics:
             image = str(pics[0].relative_to(path.parent))
 
@@ -150,7 +160,7 @@ def main(
             image = f'{url.rstrip("/")}/{image}'
 
     if not description:
-        descr_files = [f for t in info_file_masks for f in path.rglob(mask_case_fix(t))]
+        descr_files = list(iter_files(path, mask_list=info_file_masks))
         if descr_files:
             with descr_files[0].open('rb') as f:
                 raw_description = f.read()
@@ -161,11 +171,7 @@ def main(
     if verbose:
         click.echo(f'Processing path: {path} -> {url}\n')
 
-    files = [
-        f
-        for t in file_types
-        for f in path.rglob(mask_case_fix(f'*.{t}'))
-    ]
+    files = iter_files(path, mask_list=media_file_masks)
     files = [(str(f).lower(), f) for f in files]
     files.sort()  # TODO: numeric/alphabetic sort
     items = []
@@ -188,7 +194,7 @@ def main(
         )
         rss_path = path.joinpath(rss)
         rss_url = f'{url.rstrip("/")}/{quote(str(rss_path.relative_to(path.parent)))}'
-        e3.ElementTree(rss_xml).write(rss_path, encoding='utf-8', xml_declaration=True)
+        ElementTree(rss_xml).write(rss_path, encoding='utf-8', xml_declaration=True)
         click.echo(f'RSS: {rss_url}')
 
     if not no_local_settings:
