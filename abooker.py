@@ -27,6 +27,8 @@ image_types = {
     'png': 'image/png',
 }
 
+image_file_masks = [f'*.{t}' for t in image_types]
+
 info_file_masks = [
     'readme.*',
     'readme',
@@ -139,7 +141,7 @@ def main(
         settings['lang'] = lang
 
     if not image:
-        pics = [f for t in image_types for f in path.rglob(mask_case_fix(f'*.{t}'))]
+        pics = [f for t in image_file_masks for f in path.rglob(mask_case_fix(t))]
         if pics:
             image = str(pics[0].relative_to(path.parent))
 
