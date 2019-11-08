@@ -198,22 +198,23 @@ def main(
             image = f'{url.rstrip("/")}/{image}'
 
     if not description:
-        descr_files = list(iter_files(path, mask_list=info_file_masks))
-        if descr_files:
-            with descr_files[0].open('rb') as f:
-                raw_description = f.read()
-            descr_encoding = detect_encoding(raw_description)['encoding']
-            if descr_encoding:
-                description = raw_description.decode(descr_encoding)
+        for descr_file in iter_files(path, mask_list=info_file_masks):
+            try:
+                raw_description = descr_file.read_bytes()
+                descr_encoding = detect_encoding(raw_description)['encoding']
+                if raw_description and descr_encoding:
+                    description = raw_description.decode(descr_encoding)
+                    break
+            except Exception as e:
+                click.echo(f'Description reading from {descr_file} error: {e}', err=True)
 
     if verbose:
         click.echo(f'Processing path: {path} -> {url}\n')
 
     files = iter_files(path, mask_list=media_file_masks)
     files = [(filename_key(f, root=path), f) for f in files]
-    files.sort()
     items = []
-    for k, p in files:
+    for k, p in sorted(files):
         rpath = p.relative_to(path.parent)
         item = dict(
             path=p,
