@@ -41,7 +41,9 @@ info_file_masks = [
     '*.rst',
 ]
 
+BOOK_SETTINGS_FILENAME = '.abook'
 LOCAL_SETTINGS_FILENAME = '.abooker'
+LOCAL_SETTINGS_FILEMASK = '.abook*'
 
 
 def mask_case_fix(mask: str) -> str:
@@ -102,11 +104,25 @@ def make_rss(
     return xmlstr
 
 
-def load_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, errors='strict') -> dict:
+# TODO: Extract settings class
+def load_settings(
+    path: Path,
+    filename: str = None,
+    mask: str = LOCAL_SETTINGS_FILEMASK,
+    errors='strict',
+) -> dict:
+    if filename is None:
+        filenames = path.glob(mask_case_fix(mask))
+    elif isinstance(filename, str):
+        filenames = [filename]
+    else:
+        filenames = filename
+
     with contextlib.suppress(*(errors == 'ignore' and [Exception] or [])):
-        with path.joinpath(filename).open() as f:
-            data = yaml.safe_load(f)
-            return data
+        for fn in filenames:
+            with path.joinpath(fn).open() as f:
+                data = yaml.safe_load(f)
+                return data
 
 
 def save_settings(settings: dict, path: Path, errors='strict'):
@@ -132,18 +148,6 @@ def filename_key(fn: Path, root: Path = None) -> typing.Hashable:
 
     rel_path = fn.relative_to(root) if root else fn
     return tuple(split(name) for name in rel_path.parent.parts) + (split(rel_path.stem) + (rel_path.suffix,),)
-
-
-def collect_settings(path: Path, filename: str = LOCAL_SETTINGS_FILENAME, defaults: dict = None) -> dict:
-    paths_processed = set()
-    d = dict(defaults)
-    p = path
-    while p and p not in paths_processed:
-        paths_processed.add(p)
-        d.update(load_settings(p, filename=filename, errors='ignore') or {})
-        p = p.parent
-
-    return d
 
 
 @click.command()
@@ -235,10 +239,10 @@ def main(
         ))
         click.echo(f'RSS: {rss_url}')
 
+    save_settings(book_settings, path=path.joinpath(BOOK_SETTINGS_FILENAME), errors='ignore')
     if save_local_settings:
         # todo: do not save settings if they was not changed
         save_settings(settings, path=path.parent.joinpath(LOCAL_SETTINGS_FILENAME), errors='ignore')
-        save_settings(book_settings, path=path.joinpath(LOCAL_SETTINGS_FILENAME), errors='ignore')
 
 
 if __name__ == '__main__':
