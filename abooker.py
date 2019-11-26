@@ -168,9 +168,29 @@ def main(
     no_local_settings: bool, save_local_settings: bool, verbose: bool,
 ):
     path: Path = Path(path)
+    if verbose:
+        _descr_lines = description and '\n            '.join(['|'] + description.split('\n'))
+        click.echo(
+            f'CLI params:\n' 
+            f'\tpath:    {path}\n'
+            f'\turl:     {url}\n'
+            f'\trss:     {rss}\n'
+            f'\ttitle:   {title}\n'
+            f'\tauthor:  {author}\n'
+            f'\timage:   {image}\n'
+            f'\tlang:    {lang}\n'
+            f'\tlink:    {link}\n'
+            f'\tverbose: {verbose}\n' 
+            f'\tno_local_settings:   {no_local_settings}\n'
+            f'\tsave_local_settings: {save_local_settings}\n'
+            f'\tdescription: {_descr_lines}\n'
+        )
 
     settings = {} if no_local_settings else load_settings(path.parent, errors='ignore') or {}
     book_settings = load_settings(path, errors='ignore') or {}
+    if verbose:
+        click.echo(f'# settings: #\n{yaml.dump(settings, indent=2, allow_unicode=True)}')
+        click.echo(f'# book settings: #\n{yaml.dump(book_settings, indent=2, allow_unicode=True)}')
 
     url = url or settings.get('url')
     if url:
@@ -199,7 +219,7 @@ def main(
 
     if image:
         if not image.startswith('http'):
-            image = f'{url.rstrip("/")}/{image}'
+            image = f'{url and url.rstrip("/") or ""}/{image}'
 
     if not description:
         for descr_file in iter_files(path, mask_list=info_file_masks):
@@ -212,9 +232,6 @@ def main(
             except Exception as e:
                 click.echo(f'Description reading from {descr_file} error: {e}', err=True)
 
-    if verbose:
-        click.echo(f'Processing path: {path} -> {url}\n')
-
     files = iter_files(path, mask_list=media_file_masks)
     files = [(filename_key(f, root=path), f) for f in files]
     items = []
@@ -223,7 +240,7 @@ def main(
         item = dict(
             path=p,
             rpath=rpath,
-            url=f'{url.rstrip("/")}/{quote(str(rpath))}',
+            url=f'{url and url.rstrip("/") or ""}/{quote(str(rpath))}',
         )
         items.append(item)
         if verbose:
@@ -231,7 +248,7 @@ def main(
 
     if rss:
         rss_path = path.joinpath(rss)
-        rss_url = f'{url.rstrip("/")}/{quote(str(rss_path.relative_to(path.parent)))}'
+        rss_url = f'{url and url.rstrip("/") or ""}/{quote(str(rss_path.relative_to(path.parent)))}'
         rss_path.write_bytes(make_rss(
             items,
             title=title or path.name,
