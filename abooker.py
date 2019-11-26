@@ -151,7 +151,7 @@ def filename_key(fn: Path, root: Path = None) -> typing.Hashable:
 
 
 @click.command()
-@click.option('-d', '--dir', 'path', type=click.Path(file_okay=False, resolve_path=True), required=True)
+@click.option('-d', '--dir', 'path', type=click.Path(file_okay=False, resolve_path=False), required=True)
 @click.option('-u', '--url', type=str)
 @click.option('--rss', type=str, default='playlist.rss')
 @click.option('--title', type=str)
@@ -167,7 +167,7 @@ def main(
     path: str, url: str, rss: str, title: str, author: str, description: str, image: str, lang: str, link: str,
     no_local_settings: bool, save_local_settings: bool, verbose: bool,
 ):
-    path: Path = Path(path)
+    path: Path = Path(path).absolute()
     if verbose:
         _descr_lines = description and '\n            '.join(['|'] + description.split('\n'))
         click.echo(
