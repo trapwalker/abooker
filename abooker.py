@@ -244,7 +244,7 @@ def main(
         )
         items.append(item)
         if verbose:
-            click.echo(f'{rpath}:: {item["url"]}')
+            click.echo(f'\t{rpath}:: {item["url"]}')
 
     if rss:
         rss_path = path.joinpath(rss)

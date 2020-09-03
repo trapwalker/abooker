@@ -21,6 +21,7 @@ setup(
         "pathlib",
         "pyyaml",
         "charset_normalizer",
+        "youtube-dl",
     ],
     entry_points={"console_scripts": 'abooker=abooker:main'},
 )
