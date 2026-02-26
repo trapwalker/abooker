@@ -41,6 +41,9 @@ def make_rss(
         enclosure_attrs = dict(url=item['url'])
         if mime:
             enclosure_attrs['type'] = mime
+        size = item.get('size')
+        if size:
+            enclosure_attrs['length'] = str(size)
         duration = item.get('duration')
 
         item_node = SubElement(channel, 'item')

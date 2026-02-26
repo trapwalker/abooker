@@ -22,8 +22,31 @@ dependencies = [
     "yt-dlp",
 ]
 
+[project.optional-dependencies]
+core = [
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite",
+    "pydantic-settings>=2.0",
+    "unidecode",
+]
+web = [
+    "fastapi",
+    "uvicorn[standard]",
+    "aiofiles",
+    "abooker[core]",
+]
+bot = [
+    "aiogram>=3.0",
+    "qbittorrent-api",
+    "aiohttp",
+    "abooker[core]",
+]
+all = ["abooker[bot,web,core]"]
+
 [project.scripts]
 abooker = "abooker.cli:main"
+abooker-web = "abooker.web.main:run"
+abooker-bot = "abooker.bot.main:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/abooker"]

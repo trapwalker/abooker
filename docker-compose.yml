@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+  abooker-web:
+    build: .
+    command: abooker-web
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - abooker_data:/data
+    depends_on:
+      - qbittorrent
+    restart: unless-stopped
+
+  abooker-bot:
+    build: .
+    command: abooker-bot
+    env_file: .env
+    volumes:
+      - abooker_data:/data
+    depends_on:
+      - abooker-web
+      - qbittorrent
+    restart: unless-stopped
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+      - WEBUI_PORT=8080
+    volumes:
+      - qb_config:/config
+      - abooker_data:/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+    volumes:
+      - jackett_config:/config
+    ports:
+      - "9117:9117"
+    restart: unless-stopped
+
+volumes:
+  abooker_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/abooker/data
+  qb_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/abooker/qb-config
+  jackett_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/abooker/jackett-config

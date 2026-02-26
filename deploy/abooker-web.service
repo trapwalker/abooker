@@ -1,0 +1,19 @@
+[Unit]
+Description=abooker web server (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=abooker
+Group=abooker
+WorkingDirectory=/opt/abooker
+EnvironmentFile=/opt/abooker/.env
+ExecStart=/opt/abooker/.venv/bin/abooker-web
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=abooker-web
+
+[Install]
+WantedBy=multi-user.target

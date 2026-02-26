@@ -1,0 +1,19 @@
+[Unit]
+Description=abooker Telegram bot (aiogram)
+After=network.target abooker-web.service
+
+[Service]
+Type=simple
+User=abooker
+Group=abooker
+WorkingDirectory=/opt/abooker
+EnvironmentFile=/opt/abooker/.env
+ExecStart=/opt/abooker/.venv/bin/abooker-bot
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=abooker-bot
+
+[Install]
+WantedBy=multi-user.target
