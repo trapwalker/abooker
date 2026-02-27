@@ -4,6 +4,8 @@ import logging
 from aiogram import Bot, Dispatcher
 
 from abooker.bot.handlers import commands, default
+from abooker.bot.handlers import auth
+from abooker.bot.middleware import UserMiddleware
 from abooker.core.config import settings
 from abooker.core.database import init_db, recover_from_json
 
@@ -18,6 +20,9 @@ async def _main():
     bot = Bot(token=settings.BOT_TOKEN)
     dp = Dispatcher()
 
+    dp.update.outer_middleware(UserMiddleware())
+
+    dp.include_router(auth.router)
     dp.include_router(default.router)
     dp.include_router(commands.router)
 

@@ -20,7 +20,11 @@ class Settings(BaseSettings):
     CLIENT_TTL_DAYS: int = 14
 
     BOT_TOKEN: str = ""
+    BOT_ADMIN_IDS: list[int] = []
     WEB_BASE_URL: str = "http://localhost:8000"
+
+    MAX_FILE_SIZE_GB: float = 5.0
+    MIN_AUDIO_RATIO: float = 0.5
 
     @property
     def db_path(self) -> Path:

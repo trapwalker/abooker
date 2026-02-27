@@ -140,6 +140,15 @@ async def wait_for_file(torrent_hash: str, file_index: int, poll: float = POLL_I
         await asyncio.sleep(poll)
 
 
+async def remove_torrent(torrent_hash: str, delete_files: bool = False) -> None:
+    """Remove a torrent from qBittorrent (optionally delete files)."""
+    def _remove():
+        client = _make_client()
+        client.torrents_delete(torrent_hashes=torrent_hash, delete_files=delete_files)
+
+    await asyncio.get_event_loop().run_in_executor(None, _remove)
+
+
 async def get_torrent_save_path(torrent_hash: str) -> str | None:
     """Return the save path configured in qBittorrent for the torrent."""
     def _get():
