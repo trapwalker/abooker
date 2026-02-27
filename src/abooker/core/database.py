@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from abooker.core.config import settings
@@ -29,10 +29,20 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
+_MIGRATIONS = [
+    "ALTER TABLE publications ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
+]
+
+
 async def init_db():
     settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for sql in _MIGRATIONS:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass  # column already exists
 
 
 async def get_session() -> AsyncSession:

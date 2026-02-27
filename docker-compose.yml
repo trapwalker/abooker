@@ -44,28 +44,15 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Europe/Moscow
+      - JACKETT_KEY=${JACKETT_KEY}
     volumes:
       - jackett_config:/config
+      - ./scripts/jackett-set-apikey.sh:/custom-cont-init.d/set-apikey.sh:ro
     ports:
       - "9117:9117"
     restart: unless-stopped
 
 volumes:
   abooker_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /opt/abooker/data
   qb_config:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /opt/abooker/qb-config
   jackett_config:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /opt/abooker/jackett-config

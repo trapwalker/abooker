@@ -1,0 +1,34 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  default:
+    format: "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: default
+    stream: ext://sys.stdout
+
+loggers:
+  abooker:
+    level: DEBUG   # наш код — показываем всё включая debug
+    propagate: true
+  aiogram:
+    level: WARNING
+  aiohttp:
+    level: WARNING
+  aiohttp.access:
+    level: WARNING
+  sqlalchemy.engine:
+    level: WARNING
+  uvicorn:
+    level: INFO
+  uvicorn.access:
+    level: INFO
+
+root:
+  level: INFO
+  handlers: [console]

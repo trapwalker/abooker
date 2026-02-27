@@ -1,4 +1,4 @@
-.PHONY: help install install-all dev-web dev-bot dev vds-up vds-down vds-restart vds-logs
+.PHONY: help install install-all dev-web dev-bot dev vds-up vds-down vds-restart vds-logs docker-up docker-down docker-logs
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
 
@@ -29,6 +29,17 @@ help:
 	@echo ""
 	@echo "  Переменные:"
 	@echo "    VDS_USER=$(VDS_USER)  VDS_HOST=$(VDS_HOST)  VDS_DIR=$(VDS_DIR)"
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+
+docker-up:
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f
 
 # ─── Установка ────────────────────────────────────────────────────────────────
 

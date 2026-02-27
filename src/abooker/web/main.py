@@ -34,7 +34,8 @@ app.include_router(files.router)
 
 
 def run():
-    logging.basicConfig(level=logging.INFO)
+    from abooker.core.log import setup_logging
+    setup_logging()
     uvicorn.run("abooker.web.main:app", host="0.0.0.0", port=8000, reload=False)
 
 

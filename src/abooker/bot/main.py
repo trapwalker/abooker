@@ -8,12 +8,13 @@ from abooker.bot.handlers import auth
 from abooker.bot.middleware import UserMiddleware
 from abooker.core.config import settings
 from abooker.core.database import init_db, recover_from_json
+from abooker.core.log import setup_logging
 
 log = logging.getLogger(__name__)
 
 
 async def _main():
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     await init_db()
     await recover_from_json()
 
