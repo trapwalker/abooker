@@ -101,6 +101,42 @@ async def get_files(torrent_hash: str) -> list[dict[str, Any]]:
     return await asyncio.get_event_loop().run_in_executor(None, _get)
 
 
+async def get_files_status(torrent_hash: str) -> list[dict[str, Any]]:
+    """Return list of {index, name, size, progress, priority} for a torrent.
+
+    progress is 0.0-1.0, priority is qBittorrent's priority value
+    (0=skip, 1=normal, ... 7=maximal). Used to render per-chapter
+    download status in the bot's chapter list.
+    """
+    def _get():
+        client = _make_client()
+        files = client.torrents_files(torrent_hash=torrent_hash)
+        return [
+            {
+                "index": i,
+                "name": f.name,
+                "size": f.size,
+                "progress": float(f.progress),
+                "priority": int(f.priority),
+            }
+            for i, f in enumerate(files)
+        ]
+
+    return await asyncio.get_event_loop().run_in_executor(None, _get)
+
+
+async def get_torrent_speed(torrent_hash: str) -> int:
+    """Return current download speed in bytes/sec for a torrent (0 if unknown)."""
+    def _get():
+        client = _make_client()
+        info = client.torrents_info(torrent_hashes=torrent_hash)
+        if info:
+            return int(info[0].dlspeed)
+        return 0
+
+    return await asyncio.get_event_loop().run_in_executor(None, _get)
+
+
 async def set_file_priority(torrent_hash: str, file_index: int, priority: int) -> None:
     """Set download priority for a specific file (0=skip, 1=normal, 7=max)."""
     def _set():

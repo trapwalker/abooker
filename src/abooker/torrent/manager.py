@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from abooker.core.config import settings
 from abooker.core.models import AudioFile, FileStatus, Publication, UserBook
 from abooker.core.slug import unique_slug
-from abooker.files import filename_key, media_types
+from abooker.files import chapter_sort_key, media_types
 from abooker.rss import make_rss
 from abooker.torrent import client as qbt
 
@@ -170,8 +170,9 @@ async def create_publication(
             ratio = audio_size / total_size_all
             raise ValueError(f"Мало аудио-файлов: {ratio:.0%} объёма")
 
-    # 4. Natural-sort audio files by filename.
-    audio_files.sort(key=lambda f: filename_key(Path(f["name"])))
+    # 4. Order audio files by chapter number (see files.chapter_sort_key for why
+    #    plain natural/alphabetic sort is not good enough here).
+    audio_files.sort(key=lambda f: chapter_sort_key(Path(f["name"]).name))
 
     # 5. Generate slug from title or first filename.
     slug_base = title or Path(audio_files[0]["name"]).parent.name or Path(audio_files[0]["name"]).stem

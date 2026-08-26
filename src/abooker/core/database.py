@@ -31,6 +31,7 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 _MIGRATIONS = [
     "ALTER TABLE publications ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
+    "ALTER TABLE audio_files ADD COLUMN last_requested_at DATETIME",
 ]
 
 

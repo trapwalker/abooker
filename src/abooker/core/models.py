@@ -112,6 +112,10 @@ class AudioFile(Base):
     status: Mapped[FileStatus] = mapped_column(
         Enum(FileStatus), default=FileStatus.pending, nullable=False
     )
+    # Last time this chapter was delivered to a listener or explicitly warmed
+    # up by hand. Drives both warmup targeting (compute_needed_files) and
+    # global LRU eviction when disk space runs low (enforce_disk_quota).
+    last_requested_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     publication: Mapped["Publication"] = relationship(back_populates="files")
     download_events: Mapped[list["DownloadEvent"]] = relationship(back_populates="file", cascade="all, delete-orphan")
