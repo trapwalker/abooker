@@ -109,3 +109,4 @@ venv.bak/
 /tmp/
 /DATA/
 logging.local.yaml
+.DS_Store
