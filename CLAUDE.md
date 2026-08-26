@@ -4,9 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**abooker** is a Python CLI tool that generates RSS feeds for audiobooks, making local audio files subscribable as podcasts. It scans a directory of audio files, builds a valid RSS 2.0 feed (with iTunes and Google Play podcast extensions), and writes it to a `playlist.rss` file.
+**abooker** started as a Python CLI tool that generates RSS feeds from a local
+folder of audio files (still present, see below) and has grown into a full
+self-hosted service: search audiobooks on torrent trackers via Jackett, add
+them to a personal collection through a Telegram bot, and get a per-book RSS
+feed whose chapters download lazily (on first request) via qBittorrent and
+get cached to disk with automatic warmup-ahead and space-based eviction.
 
-The project is being extended with additional services: Telegram bot, torrent downloader, web server with lazy-loading API.
+Full architecture, feature list, and environment variables: **README.md**.
+Production deployment (VDS, systemd units, the shared-nginx vhost, Docker
+compose for qbittorrent+jackett): **deploy/DEPLOY.md**.
 
 ## Setup & Running
 
@@ -24,6 +31,20 @@ uv run abooker -d path/to/audiobook_folder \
 ```
 
 There are no tests or linting configs currently in the project.
+
+## Running the service
+
+```bash
+make install          # uv venv + editable install with [all] extras
+make dev-web           # uvicorn --reload, port 8000
+make dev-bot            # aiogram long polling
+make dev                 # both, via make -j2
+```
+
+`docker compose up -d` runs everything (web, bot, qbittorrent, jackett) in
+Docker for local testing. In production only qbittorrent+jackett are
+Dockerized (`docker-compose.vds.yml`); web/bot run natively via systemd — see
+deploy/DEPLOY.md for why (small, shared VDS).
 
 ## CLI Options
 
@@ -43,11 +64,27 @@ src/abooker/
     cli.py          — click entry point (main())
     rss.py          — make_rss(): builds RSS 2.0 XML
     settings.py     — load_settings(), save_settings(), settings filenames
-    files.py        — media type maps, file masks, iter_files(), filename_key(), mask_case_fix()
+    files.py        — media type maps, file masks, iter_files(), filename_key(),
+                       chapter_sort_key(), mask_case_fix()
+    format.py       — fmt_bytes()/fmt_duration(), shared by the bot's messages
+
+    core/           — Settings (pydantic-settings), SQLAlchemy async ORM + lightweight
+                       ALTER TABLE migrations, make_slug()/unique_slug()
+    torrent/        — async qbittorrent-api wrapper; create_publication() (torrent →
+                       DB records + RSS + publication.json)
+    cache/          — warmup/eviction/disk-quota/background-download-finalize logic
+    search/         — Jackett API wrapper (torznab search; indexer admin config needs
+                       a session cookie, not the apikey — see deploy/DEPLOY.md)
+    web/            — FastAPI app: /publications, /rss/{slug}, /file/{slug}/{path}
+    bot/            — aiogram 3: search/list/status/auth/chapters handlers, keyboards
 
 scripts/
-    download.py     — yt-dlp example: download YouTube audio as MP3
-    qb/start.sh     — Docker qBittorrent container startup
+    download.py             — yt-dlp example: download YouTube audio as MP3
+    jackett-set-apikey.sh   — Jackett container init: pins JACKETT_KEY
+    qbt-set-savepath.sh     — qBittorrent container init: default save path
+                               matches the volume abooker-web/bot can also see
+    qb/start.sh             — old standalone qBittorrent script, unrelated to the
+                               current docker-compose setup (different image)
 ```
 
 ## Architecture
