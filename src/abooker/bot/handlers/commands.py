@@ -11,6 +11,7 @@ from abooker.bot.keyboards import book_actions, search_results
 from abooker.core.config import settings
 from abooker.core.database import get_session_factory
 from abooker.core.models import AudioFile, FileStatus, Publication, User, UserBook
+from abooker.format import fmt_bytes as _fmt_bytes
 from abooker.search.jackett import search as jackett_search
 
 log = logging.getLogger(__name__)
@@ -43,9 +44,13 @@ async def cmd_help(message: Message, user_role: str):
         lines += [
             "",
             "/list — список ваших книг",
-            "/status — статистика сервиса",
+            "/status — статистика сервиса (в т.ч. место на диске под кеш)",
             "",
             "<b>Добавить книгу:</b> отправьте magnet-ссылку, .torrent файл или URL торрента",
+            "",
+            "В карточке книги — кнопка «📖 Главы»: список глав со статусом "
+            "(⬜ не скачана, ⏳ качается — с оценкой времени, ✅ в кеше) и кнопками "
+            "«🔥 прогреть» / «🗑 удалить» для каждой главы отдельно.",
         ]
 
     if is_admin:
@@ -122,11 +127,18 @@ async def cmd_status(message: Message, user_role: str):
             )
         ).scalar() or 0
 
+    min_free_gb = settings.MIN_FREE_DISK_GB
+    free_gb = disk.free / 1024**3
+    quota_note = (
+        f"⚠️ Ниже порога ({min_free_gb:.1f} ГБ) — идёт вытеснение старых глав"
+        if free_gb < min_free_gb
+        else f"порог очистки: {min_free_gb:.1f} ГБ"
+    )
     text = (
         f"<b>Статус сервиса</b>\n"
         f"Книг: {pub_count}\n"
-        f"Кеш: {_fmt_bytes(cached_size)}\n"
-        f"Свободно: {_fmt_bytes(disk.free)} / {_fmt_bytes(disk.total)}"
+        f"Кеш глав: {_fmt_bytes(cached_size)}\n"
+        f"Свободно на диске: {_fmt_bytes(disk.free)} / {_fmt_bytes(disk.total)} ({quota_note})"
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -367,14 +379,6 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
             message_id=status_msg.message_id,
             text=f"Ошибка: {exc}",
         )
-
-
-def _fmt_bytes(n: int) -> str:
-    for unit in ("Б", "КБ", "МБ", "ГБ", "ТБ"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} ТБ"
 
 
 # deferred import to avoid circular

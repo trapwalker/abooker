@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from abooker.bot.handlers import commands, default
+from abooker.bot.handlers import chapters, commands, default
 from abooker.bot.handlers import auth
 from abooker.bot.middleware import UserMiddleware
 from abooker.core.config import settings
@@ -26,6 +26,7 @@ async def _main():
     dp.include_router(auth.router)
     dp.include_router(default.router)
     dp.include_router(commands.router)
+    dp.include_router(chapters.router)
 
     log.info("Starting bot polling")
     await dp.start_polling(bot)
