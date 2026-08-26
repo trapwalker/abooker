@@ -1,6 +1,7 @@
 .PHONY: help install install-all dev-web dev-bot dev \
         vds-up vds-down vds-restart vds-deploy vds-logs vds-status \
         vds-docker-up vds-docker-down vds-docker-logs \
+        log_bot_remote log_srv_remote \
         docker-up docker-down docker-logs
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
@@ -11,6 +12,10 @@ VDS_DIR   ?= /home/svp/abooker
 VENV      := .venv
 PYTHON    := $(VENV)/bin/python
 UV        := uv
+
+# `srv=<ssh-alias>` override for the log_*_remote targets, e.g.
+# `make log_bot_remote srv=sl2`. Defaults to VDS_HOST so it also works bare.
+srv ?= $(VDS_HOST)
 
 # ─── Помощь ───────────────────────────────────────────────────────────────────
 
@@ -34,7 +39,10 @@ help:
 	@echo "    make vds-status      — systemctl status + свободное место на диске"
 	@echo "    make vds-docker-up/down/logs — qbittorrent+jackett"
 	@echo ""
-	@echo "  Переменные: VDS_HOST=$(VDS_HOST)  VDS_DIR=$(VDS_DIR)"
+	@echo "    make log_bot_remote srv=sl2  — стрим журнала abooker-bot (не докер, systemd)"
+	@echo "    make log_srv_remote srv=sl2  — стрим журнала abooker-web (не докер, systemd)"
+	@echo ""
+	@echo "  Переменные: VDS_HOST=$(VDS_HOST)  VDS_DIR=$(VDS_DIR)  srv=$(srv)"
 
 # ─── Docker ───────────────────────────────────────────────────────────────────
 
@@ -107,3 +115,14 @@ vds-docker-down:
 
 vds-docker-logs:
 	ssh $(VDS_HOST) "cd $(VDS_DIR) && docker compose -f docker-compose.vds.yml logs -f"
+
+# ─── Удалённые логи по имени сервиса ──────────────────────────────────────────
+# abooker-bot/abooker-web on the VDS are native systemd services, not Docker
+# containers (see deploy/DEPLOY.md) — this streams `journalctl -u <unit> -f`
+# over SSH, which is the equivalent of `docker logs -f` for them.
+
+log_bot_remote:
+	ssh $(srv) "sudo journalctl -u abooker-bot -f --no-hostname"
+
+log_srv_remote:
+	ssh $(srv) "sudo journalctl -u abooker-web -f --no-hostname"
