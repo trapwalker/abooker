@@ -40,6 +40,12 @@ class TorrentResult:
         }
 
 
+class NoIndexersConfigured(RuntimeError):
+    """Raised when Jackett has no configured indexers to query at all —
+    distinct from a query that legitimately found nothing, so callers can
+    show a more useful message than "no results"."""
+
+
 async def search(query: str, category: int = AUDIO_BOOKS_CATEGORY) -> list[dict[str, Any]]:
     """Search Jackett and return a list of TorrentResult dicts."""
     if not settings.JACKETT_URL or not settings.JACKETT_KEY:
@@ -56,6 +62,12 @@ async def search(query: str, category: int = AUDIO_BOOKS_CATEGORY) -> list[dict[
         async with http.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             resp.raise_for_status()
             data = await resp.json()
+
+    if not data.get("Indexers"):
+        raise NoIndexersConfigured(
+            "Jackett has no configured indexers — add one via Jackett's own "
+            "settings (see deploy/DEPLOY.md) before search can return anything."
+        )
 
     results = data.get("Results", [])
     return [TorrentResult(r).to_dict() for r in results]

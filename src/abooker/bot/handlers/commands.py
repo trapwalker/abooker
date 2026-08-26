@@ -12,6 +12,7 @@ from abooker.core.config import settings
 from abooker.core.database import get_session_factory
 from abooker.core.models import AudioFile, FileStatus, Publication, User, UserBook
 from abooker.format import fmt_bytes as _fmt_bytes
+from abooker.search.jackett import NoIndexersConfigured
 from abooker.search.jackett import search as jackett_search
 
 log = logging.getLogger(__name__)
@@ -30,7 +31,8 @@ async def cmd_help(message: Message, user_role: str):
     lines = [
         "<b>Доступные команды:</b>",
         "",
-        "/search &lt;запрос&gt; — поиск аудиокниг через Jackett",
+        "/search &lt;запрос&gt; — поиск аудиокниг через Jackett (работает, "
+        "только если в Jackett подключён хотя бы один трекер)",
         "/help — это сообщение",
     ]
 
@@ -153,6 +155,14 @@ async def cmd_search(message: Message):
     await message.answer(f"Ищу: <i>{query}</i>…", parse_mode="HTML")
     try:
         results = await jackett_search(query)
+    except NoIndexersConfigured:
+        await message.answer(
+            "Поиск по трекерам пока не настроен на этом сервере (ни один "
+            "источник не подключён в Jackett).\n\n"
+            "Можно добавить книгу напрямую — пришлите magnet-ссылку, "
+            ".torrent файл или URL торрента."
+        )
+        return
     except Exception as exc:
         await message.answer(f"Ошибка поиска: {exc}")
         return
