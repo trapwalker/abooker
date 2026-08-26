@@ -4,13 +4,14 @@ After=network.target abooker-web.service
 
 [Service]
 Type=simple
-User=abooker
-Group=abooker
-WorkingDirectory=/opt/abooker
-EnvironmentFile=/opt/abooker/.env
-ExecStart=/opt/abooker/.venv/bin/abooker-bot
+User=svp
+Group=svp
+WorkingDirectory=/home/svp/abooker
+EnvironmentFile=/home/svp/abooker/.env
+ExecStart=/home/svp/abooker/.venv/bin/abooker-bot
 Restart=on-failure
 RestartSec=5
+MemoryMax=200M
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=abooker-bot

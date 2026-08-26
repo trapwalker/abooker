@@ -1,16 +1,18 @@
 [Unit]
 Description=abooker web server (FastAPI)
-After=network.target
+After=network.target docker.service
 
 [Service]
 Type=simple
-User=abooker
-Group=abooker
-WorkingDirectory=/opt/abooker
-EnvironmentFile=/opt/abooker/.env
-ExecStart=/opt/abooker/.venv/bin/abooker-web
+User=svp
+Group=svp
+WorkingDirectory=/home/svp/abooker
+EnvironmentFile=/home/svp/abooker/.env
+ExecStart=/home/svp/abooker/.venv/bin/abooker-web
 Restart=on-failure
 RestartSec=5
+# Keep this small process from being able to eat the box under memory pressure.
+MemoryMax=250M
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=abooker-web

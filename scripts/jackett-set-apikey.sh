@@ -14,3 +14,9 @@ if [ -f "$CONFIG_FILE" ]; then
 else
     printf '{"APIKey": "%s"}\n' "${JACKETT_KEY}" > "$CONFIG_FILE"
 fi
+
+# This script runs as root (custom-cont-init.d, before the s6 su-exec to
+# PUID/PGID) — without this chown, a freshly-created config file is
+# root-owned and the Jackett process (running as PUID/PGID) can't write its
+# own config back on startup ("Error writing config file").
+chown -R "${PUID:-1000}:${PGID:-1000}" /config/Jackett

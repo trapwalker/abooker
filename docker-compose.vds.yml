@@ -1,0 +1,50 @@
+# VDS production compose: only qBittorrent + Jackett run in Docker here.
+# abooker-web / abooker-bot run natively via uv + systemd (see deploy/DEPLOY.md)
+# to keep memory overhead low on a small VDS — this box also hosts other
+# tenants' containers, so every extra container has a real cost.
+#
+# IMPORTANT: qbittorrent's bind mount uses the *same absolute path* on the
+# host and inside the container (${DATA_DIR}:${DATA_DIR}, not .../data:/data).
+# That way qBittorrent's reported save_path is directly usable by the native
+# abooker-web/bot processes with zero path translation, and files can be
+# symlinked into the cache instead of copied (no doubled disk usage).
+#
+# Usage: DATA_DIR must be an absolute path, e.g. /home/svp/abooker/data
+#   DATA_DIR=/home/svp/abooker/data docker compose -f docker-compose.vds.yml up -d
+
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: abooker-qbittorrent
+    mem_limit: 200m
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+      - WEBUI_PORT=8080
+      - QBT_SAVE_PATH=${DATA_DIR}/_qbt_downloads
+    volumes:
+      - ./qbt-config:/config
+      - ${DATA_DIR}:${DATA_DIR}
+      - ./scripts/qbt-set-savepath.sh:/custom-cont-init.d/set-savepath.sh:ro
+    ports:
+      - "127.0.0.1:8080:8080"   # WebUI: keep host-local, reached only via SSH tunnel
+      - "51413:51413/tcp"       # peer traffic: needs to be public for decent speeds
+      - "51413:51413/udp"
+    restart: unless-stopped
+
+  jackett:
+    image: lscr.io/linuxserver/jackett:latest
+    container_name: abooker-jackett
+    mem_limit: 350m
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+      - JACKETT_KEY=${JACKETT_KEY}
+    volumes:
+      - ./jackett-config:/config
+      - ./scripts/jackett-set-apikey.sh:/custom-cont-init.d/set-apikey.sh:ro
+    ports:
+      - "127.0.0.1:9117:9117"  # admin UI: host-local only, not public
+    restart: unless-stopped
