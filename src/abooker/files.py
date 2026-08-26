@@ -63,55 +63,88 @@ def filename_key(fn: Path, root: Path = None) -> typing.Hashable:
     return tuple(split(name) for name in rel_path.parent.parts) + (split(rel_path.stem) + (rel_path.suffix,),)
 
 
-# Words that typically precede an actual chapter/track number in torrent-sourced
-# audiobook filenames, in any of the languages/scripts commonly seen on trackers.
-_CHAPTER_WORD_RE = re.compile(
-    r'(?:глав|часть|трек|track|chapter|part|ch|№|#)\D{0,3}(\d{1,4})',
-    re.IGNORECASE,
-)
-# Numbers that look like metadata rather than a chapter index — bitrate/samplerate
-# tags immediately next to their unit, or a bare 4-digit year — are deprioritized.
-_NOISE_NUMBER_RE = re.compile(r'\d+(?=\s?(?:kbps|khz|hz|bit|bps))', re.IGNORECASE)
+# A number immediately next to a bitrate/samplerate unit (e.g. "128kbps",
+# "44.1kHz") is encoding metadata, not part of the narrative numbering —
+# skip it, or "128kbps Глава 3.mp3" would sort by 128, not 3.
+_NOISE_NUMBER_RE = re.compile(r'\d+(?=\s?(?:kbps|khz|hz|kbit|bit|bps))', re.IGNORECASE)
 
 
-def chapter_sort_key(name: str, pad: int = 6) -> str:
-    """Build a technical sort key for an audiobook chapter filename.
+def _numbers_in_path(path: Path) -> list[int]:
+    """All (non-noise) numbers found in a path, read off *every* component
+    (each directory name, then the filename's stem) left to right. An
+    audiobook's true chapter/part order can come from directory structure as
+    much as from the filename itself — "Книга 1/Глава 1/Отправление (часть
+    1).mp3" carries its (book, chapter, part) = (1, 1, 1) across all three.
+    The extension is excluded so e.g. ".mp3" doesn't contribute a bogus
+    trailing "3"."""
+    parts = list(path.parts)
+    if parts:
+        parts[-1] = Path(parts[-1]).stem
+    numbers = []
+    for part in parts:
+        noise_spans = {m.start() for m in _NOISE_NUMBER_RE.finditer(part)}
+        for m in re.finditer(r'\d+', part):
+            if m.start() not in noise_spans:
+                numbers.append(int(m.group(0)))
+    return numbers
 
-    Chapter numbering in torrent releases is inconsistent: the index can sit
-    anywhere in the name ("Глава 2.mp3" vs "02 - Глава.mp3"), and digits from
-    bitrate tags or years can outrank the real chapter number in a naive
-    "first digit run wins" scan. This extracts the most likely chapter number,
-    moves it to the front of the key and zero-pads it, so plain string sort
-    orders chapters correctly regardless of where the number originally sat
-    or how it was padded.
 
-    Falls back to filename_key()'s natural (chunked, numeric-aware) ordering
-    as a tiebreaker for files that carry the same detected number, and to a
-    high sentinel prefix for files with no usable number at all (sorted last,
-    after any real chapter).
+def _dedupe_name(name: str, used: typing.AbstractSet[str]) -> str:
+    if name not in used:
+        return name
+    p = Path(name)
+    stem, suffix = p.stem, p.suffix
+    n = 2
+    while f"{stem} ({n}){suffix}" in used:
+        n += 1
+    return f"{stem} ({n}){suffix}"
+
+
+def build_chapter_aliases(paths: typing.Sequence[Path]) -> list[str]:
+    """For a set of audiobook file paths (as they sit inside a torrent —
+    possibly nested in subdirectories that group them, e.g. by book/chapter),
+    build one alias filename per path, in the same input order, such that:
+
+      - plain alphanumeric sort of the aliases matches the correct narrative
+        order, whatever the actual directory/file layout is — the numbers
+        found across the whole path (dirs *and* filename, in order) are
+        joined into a zero-padded, dot-separated tuple and placed as a
+        prefix in front of the original filename;
+      - the original filename is otherwise untouched, so a listener who
+        pulls the raw cached files onto a plain offline mp3 player (no app,
+        no RSS) still gets them in the right order just by sorting on name,
+        while still being able to recognize each file by its original name.
+
+    Padding width is computed per tuple position (not globally), so one
+    noisy component (e.g. every file sharing a "(2020)" release-year in a
+    top-level folder) doesn't force every *other* number to pad wider than
+    it needs to.
+
+    Files with no numbers anywhere in their path sort after every numbered
+    file (each position gets that position's all-nines sentinel).
     """
-    stem = Path(name).stem
+    per_file_numbers = [_numbers_in_path(p) for p in paths]
+    max_len = max((len(ns) for ns in per_file_numbers), default=0)
 
-    noise_spans = {m.start() for m in _NOISE_NUMBER_RE.finditer(stem)}
+    pad_widths = []
+    for i in range(max_len):
+        values_here = [ns[i] for ns in per_file_numbers if len(ns) > i]
+        pad_widths.append(max(2, len(str(max(values_here, default=0)))))
 
-    keyword_match = _CHAPTER_WORD_RE.search(stem)
-    number: int | None = None
-    if keyword_match:
-        number = int(keyword_match.group(1))
-    else:
-        for m in re.finditer(r'\d+', stem):
-            if m.start() in noise_spans:
-                continue
-            number = int(m.group(0))
-            break
+    aliases: list[str] = []
+    used: set[str] = set()
+    for path, numbers in zip(paths, per_file_numbers):
+        if numbers:
+            padded = numbers + [0] * (max_len - len(numbers))
+            prefix = ".".join(str(n).zfill(pad_widths[i]) for i, n in enumerate(padded))
+        elif max_len:
+            prefix = ".".join("9" * w for w in pad_widths)
+        else:
+            prefix = ""
 
-    tiebreak = tuple(
-        int(chunk) if chunk.isdigit() else chunk.lower()
-        for chunk in re.split(r'(\d+)', stem)
-        if chunk
-    )
-    tiebreak_str = "_".join(str(c).zfill(pad) if isinstance(c, int) else c for c in tiebreak)
+        alias = f"{prefix}-{path.name}" if prefix else path.name
+        alias = _dedupe_name(alias, used)
+        used.add(alias)
+        aliases.append(alias)
 
-    if number is None:
-        return f"{'9' * pad}_{tiebreak_str}"
-    return f"{str(number).zfill(pad)}_{tiebreak_str}"
+    return aliases

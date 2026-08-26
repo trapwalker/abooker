@@ -213,8 +213,13 @@ async def evict_file(session: AsyncSession, publication_id: int, file_index: int
 
 async def link_or_copy_from_qbt(pub: Publication, af: AudioFile) -> Path:
     """Locate a finished download inside qBittorrent's save path and expose it
-    under DATA_DIR/{slug}/files/ (symlink when possible, copy as a fallback
-    across filesystems). Returns the destination path.
+    under DATA_DIR/{slug}/files/{af.filename} (our numbering-prefixed alias;
+    symlink when possible, copy as a fallback across filesystems). Returns
+    the destination path.
+
+    The source is looked up by af.source_path — the file's *real* relative
+    path inside the torrent (subdirectories included) — never af.filename,
+    since qBittorrent never renames anything to our alias.
     """
     from abooker.torrent import client as qbt
 
@@ -226,13 +231,14 @@ async def link_or_copy_from_qbt(pub: Publication, af: AudioFile) -> Path:
     if not save_path:
         raise RuntimeError(f"qBittorrent has no save path for torrent {pub.torrent_hash}")
 
-    src = Path(save_path) / af.filename
+    source_name = af.source_path or af.filename
+    src = Path(save_path) / source_name
     if not src.exists():
-        candidates = list(Path(save_path).rglob(af.filename))
+        candidates = list(Path(save_path).rglob(Path(source_name).name))
         src = candidates[0] if candidates else None
 
     if not (src and src.exists()):
-        raise RuntimeError(f"Cannot locate downloaded file {af.filename} in qBittorrent save path")
+        raise RuntimeError(f"Cannot locate downloaded file {source_name} in qBittorrent save path")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:

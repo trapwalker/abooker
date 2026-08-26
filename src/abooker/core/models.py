@@ -105,8 +105,16 @@ class AudioFile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     publication_id: Mapped[int] = mapped_column(ForeignKey("publications.id"), nullable=False)
     index: Mapped[int] = mapped_column(Integer, nullable=False)
-    url_path: Mapped[str] = mapped_column(String(64), nullable=False)   # e.g. "00.mp3"
-    filename: Mapped[str] = mapped_column(Text, nullable=False)          # original filename on disk
+    # Numbering-prefixed alias, e.g. "01.02.01-Отправление (часть 1).mp3" — see
+    # files.build_chapter_aliases(). Used both as the URL path segment and as
+    # the filename exposed under DATA_DIR/{slug}/files/.
+    url_path: Mapped[str] = mapped_column(Text, nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)          # == url_path today; kept separate
+                                                                           # since they serve different roles
+    # Original relative path of this file *inside the torrent* (as reported by
+    # qBittorrent, subdirectories included) — needed to locate the downloaded
+    # bytes under qBittorrent's save path, which is never renamed to our alias.
+    source_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     qbt_file_index: Mapped[int | None] = mapped_column(Integer)          # index in qBittorrent files list
     status: Mapped[FileStatus] = mapped_column(

@@ -90,7 +90,11 @@ async def serve_file(
                 media_type=_mime_for(af.filename),
                 headers={
                     "X-Accel-Redirect": accel_path,
-                    "Content-Disposition": f'inline; filename="{af.filename}"',
+                    # Chapter aliases can contain non-ASCII (Cyrillic etc.) —
+                    # HTTP headers can't carry that raw (h11/ASGI encode
+                    # headers as latin-1 and would blow up), so this needs
+                    # the RFC 6266 encoded form, not a plain quoted filename.
+                    "Content-Disposition": f"inline; filename*=UTF-8''{quote(af.filename)}",
                 },
             )
 

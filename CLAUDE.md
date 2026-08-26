@@ -65,7 +65,7 @@ src/abooker/
     rss.py          — make_rss(): builds RSS 2.0 XML
     settings.py     — load_settings(), save_settings(), settings filenames
     files.py        — media type maps, file masks, iter_files(), filename_key(),
-                       chapter_sort_key(), mask_case_fix()
+                       build_chapter_aliases(), mask_case_fix()
     format.py       — fmt_bytes()/fmt_duration(), shared by the bot's messages
 
     core/           — Settings (pydantic-settings), SQLAlchemy async ORM + lightweight

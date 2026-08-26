@@ -32,6 +32,7 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 _MIGRATIONS = [
     "ALTER TABLE publications ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
     "ALTER TABLE audio_files ADD COLUMN last_requested_at DATETIME",
+    "ALTER TABLE audio_files ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -91,6 +92,7 @@ async def recover_from_json():
                         index=f_data["index"],
                         url_path=url_path,
                         filename=filename,
+                        source_path=f_data.get("source_path", filename),
                         size_bytes=f_data.get("size_bytes", 0),
                         qbt_file_index=f_data.get("qbt_file_index"),
                         status=status,

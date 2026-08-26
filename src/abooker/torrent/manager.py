@@ -5,6 +5,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from abooker.core.config import settings
 from abooker.core.models import AudioFile, FileStatus, Publication, UserBook
 from abooker.core.slug import unique_slug
-from abooker.files import chapter_sort_key, media_types
+from abooker.files import build_chapter_aliases, media_types
 from abooker.rss import make_rss
 from abooker.torrent import client as qbt
 
@@ -22,10 +23,6 @@ log = logging.getLogger(__name__)
 def _is_audio(name: str) -> bool:
     ext = Path(name).suffix.lstrip(".").lower()
     return ext in media_types
-
-
-def _pad_width(n: int) -> int:
-    return len(str(max(n - 1, 0)))
 
 
 def _extract_magnet_hash(magnet: str) -> str | None:
@@ -170,11 +167,16 @@ async def create_publication(
             ratio = audio_size / total_size_all
             raise ValueError(f"Мало аудио-файлов: {ratio:.0%} объёма")
 
-    # 4. Order audio files by chapter number (see files.chapter_sort_key for why
-    #    plain natural/alphabetic sort is not good enough here).
-    audio_files.sort(key=lambda f: chapter_sort_key(Path(f["name"]).name))
+    # 4. Order audio files by a numbering-prefixed alias built from each file's
+    #    *full* path inside the torrent (directories included, not just the
+    #    filename) — see files.build_chapter_aliases for why plain
+    #    natural/alphabetic sort of just the filename is not good enough here.
+    audio_paths = [Path(f["name"]) for f in audio_files]
+    aliases = build_chapter_aliases(audio_paths)
+    audio_files = [f for f, _ in sorted(zip(audio_files, aliases), key=lambda pair: pair[1])]
+    aliases = sorted(aliases)
 
-    # 5. Generate slug from title or first filename.
+    # 5. Generate slug from title or first file's path.
     slug_base = title or Path(audio_files[0]["name"]).parent.name or Path(audio_files[0]["name"]).stem
     slug = await unique_slug(slug_base, session)
 
@@ -183,16 +185,18 @@ async def create_publication(
     files_dir = pub_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
 
-    # 7. Build url_path for each file (zero-padded index + extension).
-    pad = _pad_width(len(audio_files))
+    # 7. Build file records: url_path/filename are the alias (also used as the
+    #    on-disk name under files/ — stays close to the original filename, so
+    #    the cache directory is directly usable by a plain offline mp3 player).
+    #    source_path is the file's real path inside the torrent, used to find
+    #    it under qBittorrent's save path once downloaded (never renamed there).
     file_records = []
-    for pos, f in enumerate(audio_files):
-        ext = Path(f["name"]).suffix.lstrip(".").lower()
-        url_path = f"{str(pos).zfill(pad)}.{ext}"
+    for pos, (f, alias) in enumerate(zip(audio_files, aliases)):
         file_records.append({
             "index": pos,
-            "url_path": url_path,
-            "filename": Path(f["name"]).name,
+            "url_path": alias,
+            "filename": alias,
+            "source_path": f["name"],
             "size_bytes": f["size"],
             "qbt_file_index": f["index"],
         })
@@ -225,6 +229,7 @@ async def create_publication(
             index=r["index"],
             url_path=r["url_path"],
             filename=r["filename"],
+            source_path=r["source_path"],
             size_bytes=r["size_bytes"],
             qbt_file_index=r["qbt_file_index"],
             status=FileStatus.pending,
@@ -234,12 +239,16 @@ async def create_publication(
 
     await session.flush()
 
-    # 11. Generate RSS with URL = {WEB_BASE_URL}/file/{slug}/{url_path}.
+    # 11. Generate RSS with URL = {WEB_BASE_URL}/file/{slug}/{url_path}. The
+    #     alias can contain spaces/Cyrillic/parens now, so it needs quoting
+    #     in the URL — the episode title uses the original leaf filename
+    #     (without our numbering prefix or extension) for readability.
     rss_items = []
     for r, af in zip(file_records, audio_orm):
         rss_items.append({
             "path": Path(r["filename"]),
-            "url": f"{settings.WEB_BASE_URL}/file/{slug}/{r['url_path']}",
+            "title": Path(r["source_path"]).stem,
+            "url": f"{settings.WEB_BASE_URL}/file/{slug}/{quote(r['url_path'])}",
             "size": r["size_bytes"],
         })
 
@@ -264,6 +273,7 @@ async def create_publication(
                 "index": r["index"],
                 "url_path": r["url_path"],
                 "filename": r["filename"],
+                "source_path": r["source_path"],
                 "size_bytes": r["size_bytes"],
                 "qbt_file_index": r["qbt_file_index"],
             }
