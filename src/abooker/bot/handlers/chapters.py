@@ -151,7 +151,13 @@ async def cb_chapter_warmup(callback: CallbackQuery, user_role: str, db_user: Us
             await session.commit()
             await callback.answer("Уже в кеше ✅")
         else:
-            eta = await estimate_eta_seconds(pub, af, 0.0)
+            progress = 0.0
+            if af.qbt_file_index is not None:
+                try:
+                    progress = await qbt.get_download_progress(pub.torrent_hash, af.qbt_file_index)
+                except Exception:
+                    pass
+            eta = await estimate_eta_seconds(pub, af, progress)
             await session.commit()
             msg = "Поставлено на закачку 🔥"
             if eta is not None:
