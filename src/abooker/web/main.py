@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from abooker.core.database import init_db, recover_from_json
+from abooker.core.database import cleanup_orphaned_pending, init_db, recover_from_json
 from abooker.web.routes import files, publications, rss
 
 log = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     log.info("Recovering publications from JSON...")
     await recover_from_json()
+    await cleanup_orphaned_pending()
 
     background_tasks = [
         asyncio.create_task(periodic_eviction()),

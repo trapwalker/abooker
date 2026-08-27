@@ -34,6 +34,7 @@ async def list_publications(session: AsyncSession = Depends(get_session)):
             "slug": pub.slug,
             "title": pub.title,
             "author": pub.author,
+            "status": pub.status.value,
             "rss_url": f"{settings.WEB_BASE_URL}/rss/{pub.slug}",
             "total_files": pub.total_files,
             "cached_files": cached_count or 0,

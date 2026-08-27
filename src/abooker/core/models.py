@@ -26,6 +26,22 @@ class AuthRequestStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class PublicationStatus(str, enum.Enum):
+    # Magnet added, waiting on qBittorrent to fetch the file list from
+    # peers/DHT — the row exists (torrent_hash/source known) but slug/title
+    # are placeholders and there are no AudioFile rows yet. A row stuck here
+    # is a crash orphan (see database.py's startup cleanup): a live attempt
+    # either completes or deletes its own row on failure.
+    pending_metadata = "pending_metadata"
+    # Metadata resolved: AudioFile rows, RSS and publication.json all exist,
+    # so /rss and /file already work — but not all of the initial
+    # WARMUP_COUNT chapters are cached yet.
+    warming_up = "warming_up"
+    # Initial warmup chapters are cached. Purely informational — routes never
+    # gate on this, per-chapter FileStatus already governs serving.
+    ready = "ready"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -55,6 +71,9 @@ class Publication(Base):
     total_size: Mapped[int] = mapped_column(BigInteger, default=0)
     warmup_count: Mapped[int] = mapped_column(Integer, default=0)
     is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[PublicationStatus] = mapped_column(
+        Enum(PublicationStatus), default=PublicationStatus.ready, nullable=False
+    )
 
     files: Mapped[list["AudioFile"]] = relationship(back_populates="publication", cascade="all, delete-orphan")
     user_books: Mapped[list["UserBook"]] = relationship(back_populates="publication", cascade="all, delete-orphan")

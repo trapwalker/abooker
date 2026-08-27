@@ -7,7 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from abooker.core.config import settings
-from abooker.core.models import AudioFile, Base, FileStatus, Publication
+from abooker.core.models import AudioFile, Base, FileStatus, Publication, PublicationStatus
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,10 @@ _MIGRATIONS = [
     "ALTER TABLE publications ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT 0",
     "ALTER TABLE audio_files ADD COLUMN last_requested_at DATETIME",
     "ALTER TABLE audio_files ADD COLUMN source_path TEXT NOT NULL DEFAULT ''",
+    # Every publication that existed before this column was added already
+    # went through the old, fully-synchronous create_publication() — so
+    # 'ready' (not 'pending_metadata') is the correct backfill value.
+    "ALTER TABLE publications ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'",
 ]
 
 
@@ -50,6 +54,37 @@ async def init_db():
 async def get_session() -> AsyncSession:
     async with get_session_factory()() as session:
         yield session
+
+
+async def cleanup_orphaned_pending():
+    """Delete Publication rows stuck in `pending_metadata` at startup.
+
+    A live create_publication() call either finishes (→ warming_up) or
+    deletes its own row on failure — see torrent.manager. A row still in
+    `pending_metadata` when the process starts can only mean the previous
+    run died mid-wait (crash/restart), and its slug/title are placeholders
+    the user was never shown, so there's nothing useful to recover: drop the
+    row and best-effort remove the torrent from qBittorrent to avoid it
+    piling up unseeded/unused.
+    """
+    from abooker.torrent import client as qbt
+
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(Publication).where(Publication.status == PublicationStatus.pending_metadata)
+        )
+        orphans = result.scalars().all()
+        for pub in orphans:
+            log.warning("Dropping orphaned pending_metadata publication (id=%d, hash=%s)", pub.id, pub.torrent_hash)
+            if pub.torrent_hash:
+                try:
+                    await qbt.remove_torrent(pub.torrent_hash)
+                except Exception:
+                    log.warning("Could not remove orphaned torrent %s", pub.torrent_hash, exc_info=True)
+            await session.delete(pub)
+        if orphans:
+            await session.commit()
 
 
 async def recover_from_json():
@@ -73,6 +108,10 @@ async def recover_from_json():
                     torrent_hash=data.get("torrent_hash", ""),
                     created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(timezone.utc),
                     warmup_count=data.get("warmup_count", 0),
+                    # publication.json is only written after metadata resolved
+                    # and AudioFile rows/RSS already exist (see torrent.manager),
+                    # so a row recovered from it is at least warming_up already.
+                    status=PublicationStatus.warming_up,
                 )
                 session.add(pub)
                 await session.flush()
