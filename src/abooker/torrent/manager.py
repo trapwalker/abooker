@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from abooker.core.config import settings
-from abooker.core.models import AudioFile, FileStatus, Publication, UserBook
+from abooker.core.models import AudioFile, FileStatus, Publication, PublicationStatus, UserBook
 from abooker.core.slug import unique_slug
 from abooker.files import build_chapter_aliases, media_types
 from abooker.rss import make_rss
@@ -146,9 +146,14 @@ async def create_publication(
         except Exception:
             pass
 
+    # Both dedup checks exclude pending_metadata rows: those are another
+    # in-flight attempt at the same torrent that hasn't resolved a real
+    # slug/RSS yet, not a usable publication to hand back as "already added".
     if pre_hash:
         result = await session.execute(
-            select(Publication).where(Publication.torrent_hash == pre_hash)
+            select(Publication)
+            .where(Publication.torrent_hash == pre_hash)
+            .where(Publication.status != PublicationStatus.pending_metadata)
         )
         existing_pub = result.scalar_one_or_none()
         if existing_pub is not None:
@@ -164,7 +169,9 @@ async def create_publication(
     # --- Post-add deduplication (for HTTP URLs) ---
     if not pre_hash:
         result = await session.execute(
-            select(Publication).where(Publication.torrent_hash == torrent_hash)
+            select(Publication)
+            .where(Publication.torrent_hash == torrent_hash)
+            .where(Publication.status != PublicationStatus.pending_metadata)
         )
         existing_pub = result.scalar_one_or_none()
         if existing_pub is not None:
@@ -173,163 +180,206 @@ async def create_publication(
             log.info("Deduplication: returning existing publication %s", existing_pub.slug)
             return existing_pub, False
 
-    # 2. List files, filter audio. wait_for_metadata is needed for magnet
-    #    links: qBittorrent knows the hash immediately but the file list only
-    #    arrives once metadata is fetched from peers/DHT — see its docstring.
-    all_files = await qbt.wait_for_metadata(
-        torrent_hash,
-        timeout=settings.METADATA_TIMEOUT,
-        on_progress=on_metadata_progress,
-        progress_interval=settings.METADATA_PROGRESS_INTERVAL,
-    )
-    if not all_files:
-        diag = await qbt.get_swarm_diagnostics(torrent_hash)
-        hint = _format_metadata_timeout_hint(diag)
-        raise ValueError(
-            f"Не удалось получить список файлов раздачи за "
-            f"{settings.METADATA_TIMEOUT:.0f} с. {hint}"
-        )
-    audio_files = [f for f in all_files if _is_audio(f["name"])]
-    if not audio_files:
-        raise ValueError("Нет аудио-файлов в раздаче")
-
-    # 3. Content validation.
-    if settings.MAX_FILE_SIZE_GB:
-        max_bytes = settings.MAX_FILE_SIZE_GB * 1024**3
-        too_large = [f for f in audio_files if f["size"] > max_bytes]
-        if too_large:
-            name = Path(too_large[0]["name"]).name
-            size_gb = too_large[0]["size"] / 1024**3
-            raise ValueError(f"Файл слишком большой: {name} ({size_gb:.1f} ГБ)")
-
-    if settings.MIN_AUDIO_RATIO and all_files:
-        audio_size = sum(f["size"] for f in audio_files)
-        total_size_all = sum(f["size"] for f in all_files)
-        if total_size_all > 0 and audio_size / total_size_all < settings.MIN_AUDIO_RATIO:
-            ratio = audio_size / total_size_all
-            raise ValueError(f"Мало аудио-файлов: {ratio:.0%} объёма")
-
-    # 4. Order audio files by a numbering-prefixed alias built from each file's
-    #    *full* path inside the torrent (directories included, not just the
-    #    filename) — see files.build_chapter_aliases for why plain
-    #    natural/alphabetic sort of just the filename is not good enough here.
-    audio_paths = [Path(f["name"]) for f in audio_files]
-    aliases = build_chapter_aliases(audio_paths)
-    audio_files = [f for f, _ in sorted(zip(audio_files, aliases), key=lambda pair: pair[1])]
-    aliases = sorted(aliases)
-
-    # 5. Generate slug from title or first file's path.
-    slug_base = title or Path(audio_files[0]["name"]).parent.name or Path(audio_files[0]["name"]).stem
-    slug = await unique_slug(slug_base, session)
-
-    # 6. Create data directory.
-    pub_dir = settings.DATA_DIR / slug
-    files_dir = pub_dir / "files"
-    files_dir.mkdir(parents=True, exist_ok=True)
-
-    # 7. Build file records: url_path/filename are the alias (also used as the
-    #    on-disk name under files/ — stays close to the original filename, so
-    #    the cache directory is directly usable by a plain offline mp3 player).
-    #    source_path is the file's real path inside the torrent, used to find
-    #    it under qBittorrent's save path once downloaded (never renamed there).
-    file_records = []
-    for pos, (f, alias) in enumerate(zip(audio_files, aliases)):
-        file_records.append({
-            "index": pos,
-            "url_path": alias,
-            "filename": alias,
-            "source_path": f["name"],
-            "size_bytes": f["size"],
-            "qbt_file_index": f["index"],
-        })
-
-    total_size = sum(r["size_bytes"] for r in file_records)
-
-    # 8. Create Publication ORM.
+    # 2. Persist a pending_metadata placeholder *now*, before we know the file
+    #    list. This is what makes "waiting for a magnet's metadata" a real,
+    #    observable state (PublicationStatus.pending_metadata) instead of
+    #    something that only lives inside this coroutine's local variables —
+    #    it survives long enough to be queried, and cleanup_orphaned_pending()
+    #    can recognize + drop it if the process dies before we get past this
+    #    point. slug/title are throwaway placeholders, overwritten in step 6
+    #    once the real file list is known.
+    placeholder_slug = await unique_slug(f"pending-{torrent_hash[:12]}", session)
     pub = Publication(
-        slug=slug,
-        title=title or slug_base,
+        slug=placeholder_slug,
+        title=title or "Загрузка…",
         author=author,
         source=source,
         torrent_hash=torrent_hash,
         created_at=datetime.now(timezone.utc),
-        total_files=len(file_records),
-        total_size=total_size,
+        status=PublicationStatus.pending_metadata,
     )
     session.add(pub)
     await session.flush()  # get pub.id
-
-    # 9. Create UserBook if user_id provided.
     if user_id:
         await _ensure_user_book(session, user_id, pub.id)
+    # Commit now (not just flush) so the pending_metadata row is durable
+    # while we wait, possibly for minutes — otherwise a crash mid-wait would
+    # leave no trace at all, defeating the point of persisting this phase.
+    await session.commit()
+    pub_id = pub.id  # captured now: `pub` may be expired after a rollback below
 
-    # 10. Create AudioFile ORM records.
-    audio_orm = []
-    for r in file_records:
-        af = AudioFile(
-            publication_id=pub.id,
-            index=r["index"],
-            url_path=r["url_path"],
-            filename=r["filename"],
-            source_path=r["source_path"],
-            size_bytes=r["size_bytes"],
-            qbt_file_index=r["qbt_file_index"],
-            status=FileStatus.pending,
+    try:
+        # 3. List files, filter audio. wait_for_metadata is needed for magnet
+        #    links: qBittorrent knows the hash immediately but the file list
+        #    only arrives once metadata is fetched from peers/DHT — see its
+        #    docstring.
+        all_files = await qbt.wait_for_metadata(
+            torrent_hash,
+            timeout=settings.METADATA_TIMEOUT,
+            on_progress=on_metadata_progress,
+            progress_interval=settings.METADATA_PROGRESS_INTERVAL,
         )
-        session.add(af)
-        audio_orm.append(af)
+        if not all_files:
+            diag = await qbt.get_swarm_diagnostics(torrent_hash)
+            hint = _format_metadata_timeout_hint(diag)
+            raise ValueError(
+                f"Не удалось получить список файлов раздачи за "
+                f"{settings.METADATA_TIMEOUT:.0f} с. {hint}"
+            )
+        audio_files = [f for f in all_files if _is_audio(f["name"])]
+        if not audio_files:
+            raise ValueError("Нет аудио-файлов в раздаче")
 
-    await session.flush()
+        # 4. Content validation.
+        if settings.MAX_FILE_SIZE_GB:
+            max_bytes = settings.MAX_FILE_SIZE_GB * 1024**3
+            too_large = [f for f in audio_files if f["size"] > max_bytes]
+            if too_large:
+                name = Path(too_large[0]["name"]).name
+                size_gb = too_large[0]["size"] / 1024**3
+                raise ValueError(f"Файл слишком большой: {name} ({size_gb:.1f} ГБ)")
 
-    # 11. Generate RSS with URL = {WEB_BASE_URL}/file/{slug}/{url_path}. The
-    #     alias can contain spaces/Cyrillic/parens now, so it needs quoting
-    #     in the URL — the episode title uses the original leaf filename
-    #     (without our numbering prefix or extension) for readability.
-    rss_items = []
-    for r, af in zip(file_records, audio_orm):
-        rss_items.append({
-            "path": Path(r["filename"]),
-            "title": Path(r["source_path"]).stem,
-            "url": f"{settings.WEB_BASE_URL}/file/{slug}/{quote(r['url_path'])}",
-            "size": r["size_bytes"],
-        })
+        if settings.MIN_AUDIO_RATIO and all_files:
+            audio_size = sum(f["size"] for f in audio_files)
+            total_size_all = sum(f["size"] for f in all_files)
+            if total_size_all > 0 and audio_size / total_size_all < settings.MIN_AUDIO_RATIO:
+                ratio = audio_size / total_size_all
+                raise ValueError(f"Мало аудио-файлов: {ratio:.0%} объёма")
 
-    rss_bytes = make_rss(
-        rss_items,
-        title=pub.title,
-        author=pub.author,
-    )
-    (pub_dir / "playlist.rss").write_bytes(rss_bytes)
+        # 5. Order audio files by a numbering-prefixed alias built from each
+        #    file's *full* path inside the torrent (directories included, not
+        #    just the filename) — see files.build_chapter_aliases for why
+        #    plain natural/alphabetic sort of just the filename is not good
+        #    enough here.
+        audio_paths = [Path(f["name"]) for f in audio_files]
+        aliases = build_chapter_aliases(audio_paths)
+        audio_files = [f for f, _ in sorted(zip(audio_files, aliases), key=lambda pair: pair[1])]
+        aliases = sorted(aliases)
 
-    # 12. Write publication.json for crash-recovery.
-    pub_json = {
-        "slug": slug,
-        "title": pub.title,
-        "author": pub.author,
-        "source": source,
-        "torrent_hash": torrent_hash,
-        "created_at": pub.created_at.isoformat(),
-        "warmup_count": 0,
-        "files": [
-            {
-                "index": r["index"],
-                "url_path": r["url_path"],
-                "filename": r["filename"],
-                "source_path": r["source_path"],
-                "size_bytes": r["size_bytes"],
-                "qbt_file_index": r["qbt_file_index"],
-            }
-            for r in file_records
-        ],
-    }
-    (pub_dir / "publication.json").write_text(json.dumps(pub_json, ensure_ascii=False, indent=2))
+        # 6. Now that we know the real file list, replace the placeholder
+        #    slug/title with the real ones. Safe to rename in place — nothing
+        #    outside this process has been told the placeholder slug yet.
+        slug_base = title or Path(audio_files[0]["name"]).parent.name or Path(audio_files[0]["name"]).stem
+        slug = await unique_slug(slug_base, session)
+        pub.slug = slug
+        pub.title = title or slug_base
 
-    # 13. Set priority=7 (max) for first WARMUP_COUNT files.
-    for r in file_records[: settings.WARMUP_COUNT]:
-        try:
-            await qbt.set_file_priority(torrent_hash, r["qbt_file_index"], 7)
-        except Exception:
-            log.warning("Could not set priority for file %s", r["filename"], exc_info=True)
+        # 7. Create data directory.
+        pub_dir = settings.DATA_DIR / slug
+        files_dir = pub_dir / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info("Publication created: %s (%d files)", slug, len(file_records))
-    return pub, True
+        # 8. Build file records: url_path/filename are the alias (also used as
+        #    the on-disk name under files/ — stays close to the original
+        #    filename, so the cache directory is directly usable by a plain
+        #    offline mp3 player). source_path is the file's real path inside
+        #    the torrent, used to find it under qBittorrent's save path once
+        #    downloaded (never renamed there).
+        file_records = []
+        for pos, (f, alias) in enumerate(zip(audio_files, aliases)):
+            file_records.append({
+                "index": pos,
+                "url_path": alias,
+                "filename": alias,
+                "source_path": f["name"],
+                "size_bytes": f["size"],
+                "qbt_file_index": f["index"],
+            })
+
+        total_size = sum(r["size_bytes"] for r in file_records)
+        pub.total_files = len(file_records)
+        pub.total_size = total_size
+        pub.status = PublicationStatus.warming_up
+
+        # 9. Create AudioFile ORM records.
+        audio_orm = []
+        for r in file_records:
+            af = AudioFile(
+                publication_id=pub.id,
+                index=r["index"],
+                url_path=r["url_path"],
+                filename=r["filename"],
+                source_path=r["source_path"],
+                size_bytes=r["size_bytes"],
+                qbt_file_index=r["qbt_file_index"],
+                status=FileStatus.pending,
+            )
+            session.add(af)
+            audio_orm.append(af)
+
+        await session.flush()
+
+        # 10. Generate RSS with URL = {WEB_BASE_URL}/file/{slug}/{url_path}.
+        #     The alias can contain spaces/Cyrillic/parens now, so it needs
+        #     quoting in the URL — the episode title uses the original leaf
+        #     filename (without our numbering prefix or extension) for
+        #     readability.
+        rss_items = []
+        for r, af in zip(file_records, audio_orm):
+            rss_items.append({
+                "path": Path(r["filename"]),
+                "title": Path(r["source_path"]).stem,
+                "url": f"{settings.WEB_BASE_URL}/file/{slug}/{quote(r['url_path'])}",
+                "size": r["size_bytes"],
+            })
+
+        rss_bytes = make_rss(
+            rss_items,
+            title=pub.title,
+            author=pub.author,
+        )
+        (pub_dir / "playlist.rss").write_bytes(rss_bytes)
+
+        # 11. Write publication.json for crash-recovery.
+        pub_json = {
+            "slug": slug,
+            "title": pub.title,
+            "author": pub.author,
+            "source": source,
+            "torrent_hash": torrent_hash,
+            "created_at": pub.created_at.isoformat(),
+            "warmup_count": 0,
+            "files": [
+                {
+                    "index": r["index"],
+                    "url_path": r["url_path"],
+                    "filename": r["filename"],
+                    "source_path": r["source_path"],
+                    "size_bytes": r["size_bytes"],
+                    "qbt_file_index": r["qbt_file_index"],
+                }
+                for r in file_records
+            ],
+        }
+        (pub_dir / "publication.json").write_text(json.dumps(pub_json, ensure_ascii=False, indent=2))
+
+        # 12. Set priority=7 (max) for first WARMUP_COUNT files and mark them
+        #     `downloading` so periodic_finalize (cache.manager) picks them up
+        #     and materializes them into files/ on its own, without waiting
+        #     for a listener to request them first. pub itself stays
+        #     `warming_up` until that same background pass notices they're
+        #     all actually cached and flips it to `ready` — purely
+        #     informational, no route gates on it.
+        for r, af in list(zip(file_records, audio_orm))[: settings.WARMUP_COUNT]:
+            try:
+                await qbt.set_file_priority(torrent_hash, r["qbt_file_index"], 7)
+                af.status = FileStatus.downloading
+            except Exception:
+                log.warning("Could not set priority for file %s", r["filename"], exc_info=True)
+
+        log.info("Publication created: %s (%d files)", slug, len(file_records))
+        return pub, True
+
+    except Exception:
+        # The torrent never resolved (dead magnet) or failed content
+        # validation — nothing usable was ever created, so drop the
+        # placeholder row rather than leave a permanently-pending stub that
+        # would also break dedup (a retry of the same hash would otherwise
+        # find it and report false success). Roll back first to discard any
+        # AudioFile rows already flushed this attempt, then delete the
+        # already-committed placeholder itself.
+        await session.rollback()
+        await session.execute(delete(UserBook).where(UserBook.publication_id == pub_id))
+        await session.execute(delete(Publication).where(Publication.id == pub_id))
+        await session.commit()
+        raise
