@@ -144,12 +144,12 @@ async def wait_for_metadata(
     """Poll get_files() until qBittorrent has the torrent's file list, or timeout.
 
     A .torrent file/URL embeds its file list, so get_files() returns it right
-    away. A magnet link only carries the info-hash — qBittorrent registers the
-    torrent immediately but the actual file list arrives later, once it has
-    fetched metadata from peers/DHT, which can take anywhere from a second to
-    several minutes depending on swarm health. Until then torrents_files()
-    reports an empty list, which create_publication() would otherwise misread
-    as "no audio files in this torrent".
+    away. A magnet link only carries the info-hash — the file list arrives
+    later, once metadata is fetched from peers/DHT. That fetch needs the
+    torrent to actually be resumed first (see resume_torrent's docstring) —
+    a stopped torrent never attempts it at all, however long you wait, which
+    is what actually caused every "no files found"/"no seeds found" case so
+    far, not a slow or dead swarm.
 
     If `on_progress` is given, it's awaited roughly every `progress_interval`
     seconds with (elapsed_seconds, swarm_diagnostics) so a caller (e.g. the
@@ -225,6 +225,51 @@ async def set_file_priority(torrent_hash: str, file_index: int, priority: int) -
             client.torrents_resume(torrent_hashes=torrent_hash)
 
     await asyncio.get_event_loop().run_in_executor(None, _set)
+
+
+async def set_files_priority(torrent_hash: str, file_indices: list[int], priority: int) -> None:
+    """Set download priority for several files in one call (see set_file_priority).
+
+    Used right after a magnet's metadata resolves, to zero out every file at
+    once — see resume_torrent's docstring for why that's needed at all.
+    """
+    if not file_indices:
+        return
+
+    def _set():
+        client = _make_client()
+        client.torrents_file_priority(
+            torrent_hash=torrent_hash,
+            file_ids=file_indices,
+            priority=priority,
+        )
+        if priority > 0:
+            client.torrents_resume(torrent_hashes=torrent_hash)
+
+    await asyncio.get_event_loop().run_in_executor(None, _set)
+
+
+async def resume_torrent(torrent_hash: str) -> None:
+    """Resume a torrent added with stopped=True.
+
+    Needed specifically to let a magnet fetch its metadata at all: a torrent
+    stays completely inert while stopped in this qBittorrent version — no
+    peer connections, no DHT lookups, nothing — which looks exactly like a
+    dead/blocked swarm from the outside (confirmed live: Ubuntu's official,
+    massively-seeded release ISO sat at 0 peers for 30s+ added
+    stopped=True, then resolved metadata in ~4s the moment it was resumed).
+    A .torrent file/URL doesn't strictly need this — its metadata is already
+    embedded — but resuming it too is harmless and keeps the caller's logic
+    uniform across source types; every file defaults to priority 1 (Normal)
+    once metadata is known regardless of source type, so the caller must
+    zero out unwanted files (see set_files_priority) right after, or a
+    resumed torrent will download everything, not just the warmup head.
+    """
+    def _resume():
+        client = _make_client()
+        client.torrents_resume(torrent_hashes=torrent_hash)
+
+    await asyncio.get_event_loop().run_in_executor(None, _resume)
 
 
 async def get_download_progress(torrent_hash: str, file_index: int) -> float:

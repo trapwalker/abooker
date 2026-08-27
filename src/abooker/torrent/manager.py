@@ -163,7 +163,9 @@ async def create_publication(
             log.info("Deduplication: returning existing publication %s", existing_pub.slug)
             return existing_pub, False
 
-    # 1. Add torrent to qBittorrent with all files set to priority=0 (skip).
+    # 1. Add torrent to qBittorrent. Files aren't actually set to priority=0
+    #    yet at this point — for a magnet, they aren't even known yet — that
+    #    happens explicitly in step 4, right after metadata resolves.
     try:
         torrent_hash = await qbt.add_torrent_ex(source)
     except Conflict409Error:
@@ -228,7 +230,14 @@ async def create_publication(
     pub_id = pub.id  # captured now: `pub` may be expired after a rollback below
 
     try:
-        # 3. List files, filter audio. wait_for_metadata is needed for magnet
+        # 3. Resume so metadata can actually be fetched — a stopped torrent
+        #    is completely inert in this qBittorrent version (no peer
+        #    connections, no DHT lookups), which looks exactly like a dead
+        #    swarm from here. See resume_torrent's docstring: confirmed live
+        #    against a massively-seeded public torrent.
+        await qbt.resume_torrent(torrent_hash)
+
+        # 4. List files, filter audio. wait_for_metadata is needed for magnet
         #    links: qBittorrent knows the hash immediately but the file list
         #    only arrives once metadata is fetched from peers/DHT — see its
         #    docstring.
@@ -245,11 +254,20 @@ async def create_publication(
                 f"Не удалось получить список файлов раздачи за "
                 f"{settings.METADATA_TIMEOUT:.0f} с. {hint}"
             )
+
+        # Every file defaults to priority 1 (Normal) the moment metadata is
+        # known, regardless of source type — and since step 3 just resumed
+        # the torrent to make that possible, it would otherwise start
+        # downloading everything right now, not just the warmup head set up
+        # in step 13. Zero it all out immediately; the head files get
+        # explicitly re-prioritized once we know which ones those are.
+        await qbt.set_files_priority(torrent_hash, [f["index"] for f in all_files], 0)
+
         audio_files = [f for f in all_files if _is_audio(f["name"])]
         if not audio_files:
             raise ValueError("Нет аудио-файлов в раздаче")
 
-        # 4. Content validation.
+        # 5. Content validation.
         if settings.MAX_FILE_SIZE_GB:
             max_bytes = settings.MAX_FILE_SIZE_GB * 1024**3
             too_large = [f for f in audio_files if f["size"] > max_bytes]
@@ -265,7 +283,7 @@ async def create_publication(
                 ratio = audio_size / total_size_all
                 raise ValueError(f"Мало аудио-файлов: {ratio:.0%} объёма")
 
-        # 5. Order audio files by a numbering-prefixed alias built from each
+        # 6. Order audio files by a numbering-prefixed alias built from each
         #    file's *full* path inside the torrent (directories included, not
         #    just the filename) — see files.build_chapter_aliases for why
         #    plain natural/alphabetic sort of just the filename is not good
@@ -275,7 +293,7 @@ async def create_publication(
         audio_files = [f for f, _ in sorted(zip(audio_files, aliases), key=lambda pair: pair[1])]
         aliases = sorted(aliases)
 
-        # 6. Now that we know the real file list, replace the placeholder
+        # 7. Now that we know the real file list, replace the placeholder
         #    slug/title with the real ones. Safe to rename in place — nothing
         #    outside this process has been told the placeholder slug yet.
         slug_base = title or Path(audio_files[0]["name"]).parent.name or Path(audio_files[0]["name"]).stem
@@ -283,12 +301,12 @@ async def create_publication(
         pub.slug = slug
         pub.title = title or slug_base
 
-        # 7. Create data directory.
+        # 8. Create data directory.
         pub_dir = settings.DATA_DIR / slug
         files_dir = pub_dir / "files"
         files_dir.mkdir(parents=True, exist_ok=True)
 
-        # 8. Build file records: url_path/filename are the alias (also used as
+        # 9. Build file records: url_path/filename are the alias (also used as
         #    the on-disk name under files/ — stays close to the original
         #    filename, so the cache directory is directly usable by a plain
         #    offline mp3 player). source_path is the file's real path inside
@@ -310,7 +328,7 @@ async def create_publication(
         pub.total_size = total_size
         pub.status = PublicationStatus.warming_up
 
-        # 9. Create AudioFile ORM records.
+        # 10. Create AudioFile ORM records.
         audio_orm = []
         for r in file_records:
             af = AudioFile(
@@ -328,7 +346,7 @@ async def create_publication(
 
         await session.flush()
 
-        # 10. Generate RSS with URL = {WEB_BASE_URL}/file/{slug}/{url_path}.
+        # 11. Generate RSS with URL = {WEB_BASE_URL}/file/{slug}/{url_path}.
         #     The alias can contain spaces/Cyrillic/parens now, so it needs
         #     quoting in the URL — the episode title uses the original leaf
         #     filename (without our numbering prefix or extension) for
@@ -349,7 +367,7 @@ async def create_publication(
         )
         (pub_dir / "playlist.rss").write_bytes(rss_bytes)
 
-        # 11. Write publication.json for crash-recovery.
+        # 12. Write publication.json for crash-recovery.
         pub_json = {
             "slug": slug,
             "title": pub.title,
@@ -372,7 +390,7 @@ async def create_publication(
         }
         (pub_dir / "publication.json").write_text(json.dumps(pub_json, ensure_ascii=False, indent=2))
 
-        # 12. Set priority=7 (max) for first WARMUP_COUNT files and mark them
+        # 13. Set priority=7 (max) for first WARMUP_COUNT files and mark them
         #     `downloading` so periodic_finalize (cache.manager) picks them up
         #     and materializes them into files/ on its own, without waiting
         #     for a listener to request them first. pub itself stays
