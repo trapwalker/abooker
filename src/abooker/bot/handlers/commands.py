@@ -7,10 +7,11 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import exists, func, or_, select
 
+from abooker.bot.handlers.default import _format_metadata_progress
 from abooker.bot.keyboards import book_actions, search_results
 from abooker.core.config import settings
 from abooker.core.database import get_session_factory
-from abooker.core.models import AudioFile, FileStatus, Publication, User, UserBook
+from abooker.core.models import AudioFile, FileStatus, Publication, PublicationStatus, User, UserBook
 from abooker.format import fmt_bytes as _fmt_bytes
 from abooker.search.jackett import NoIndexersConfigured
 from abooker.search.jackett import search as jackett_search
@@ -18,6 +19,12 @@ from abooker.search.jackett import search as jackett_search
 log = logging.getLogger(__name__)
 
 router = Router()
+
+_STATUS_LABEL = {
+    PublicationStatus.pending_metadata: "⏳ ждём метаданные",
+    PublicationStatus.warming_up: "🔥 прогревается",
+    PublicationStatus.ready: None,  # normal state, no badge needed
+}
 
 # In-memory store for last search results (keyed by chat_id) for callback handling.
 _last_search: dict[int, list[dict]] = {}
@@ -102,9 +109,11 @@ async def cmd_list(message: Message, user_role: str, db_user: User | None):
     for pub in pubs:
         rss_url = f"{settings.WEB_BASE_URL}/rss/{pub.slug}"
         public_label = " 🌐" if pub.is_public else ""
+        status_label = _STATUS_LABEL.get(pub.status)
+        status_line = f"\n{status_label}" if status_label else ""
         text = (
             f"<b>{pub.title}</b>{public_label}\n"
-            f"Файлов: {pub.total_files} | RSS: <code>{rss_url}</code>"
+            f"Файлов: {pub.total_files} | RSS: <code>{rss_url}</code>{status_line}"
         )
         await message.answer(
             text,
@@ -211,10 +220,12 @@ async def cb_pub_status(callback: CallbackQuery):
         )
         cached_count, cached_size = cached_q.one()
 
+    status_label = _STATUS_LABEL.get(pub.status)
+    status_line = f"\n{status_label}" if status_label else ""
     text = (
         f"<b>{pub.title}</b>\n"
         f"Файлов: {pub.total_files}\n"
-        f"Кеш: {cached_count or 0} ({_fmt_bytes(cached_size or 0)})"
+        f"Кеш: {cached_count or 0} ({_fmt_bytes(cached_size or 0)}){status_line}"
     )
     await callback.answer()
     await callback.message.answer(text, parse_mode="HTML")
@@ -352,6 +363,17 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
 
     await callback.answer()
     status_msg = await callback.message.answer("Добавляю книгу…")
+
+    async def on_metadata_progress(elapsed: float, diag: dict) -> None:
+        try:
+            await callback.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg.message_id,
+                text=_format_metadata_progress(elapsed, diag),
+            )
+        except Exception:
+            log.debug("Could not edit status message with metadata progress", exc_info=True)
+
     try:
         factory = get_session_factory()
         async with factory() as session:
@@ -360,6 +382,7 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
                 source,
                 title=results[idx].get("title"),
                 user_id=db_user.id if db_user else None,
+                on_metadata_progress=on_metadata_progress,
             )
             await session.commit()
 
