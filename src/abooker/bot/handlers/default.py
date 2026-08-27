@@ -7,6 +7,7 @@ from aiogram import Bot, Router
 from aiogram.types import Document, Message
 
 from abooker.bot.keyboards import book_actions
+from abooker.bot.telegram_retry import with_retry
 from abooker.core.config import settings
 from abooker.core.database import get_session_factory
 from abooker.core.models import User
@@ -46,7 +47,12 @@ async def _create_and_notify(
     db_user: User | None,
 ):
     is_admin = user_role == "admin"
-    status_msg = await bot.send_message(chat_id, "Добавляю книгу…")
+    # This VDS's route to Telegram is intermittently flaky (see
+    # bot/telegram_retry.py) — without a retry here, a single blip on this
+    # very first call would silently drop the whole request before
+    # create_publication is even reached: the user would see no reaction
+    # at all, not even an error.
+    status_msg = await with_retry(lambda: bot.send_message(chat_id, "Добавляю книгу…"))
 
     async def on_metadata_progress(elapsed: float, diag: dict) -> None:
         try:
@@ -83,20 +89,20 @@ async def _create_and_notify(
                 f"Книга уже есть, добавлена к вашим: <b>{pub.title}</b>\n"
                 f"RSS: <code>{rss_url}</code>"
             )
-        await bot.edit_message_text(
+        await with_retry(lambda: bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
             text=text,
             parse_mode="HTML",
             reply_markup=book_actions(pub.id, pub.slug, is_admin=is_admin, is_public=pub.is_public),
-        )
+        ))
     except Exception as exc:
         log.exception("Failed to create publication from %s", source)
-        await bot.edit_message_text(
+        await with_retry(lambda: bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
             text=f"Ошибка: {exc}",
-        )
+        ))
 
 
 @router.message(lambda m: m.document and m.document.file_name and m.document.file_name.endswith(".torrent"))

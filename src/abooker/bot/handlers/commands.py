@@ -9,6 +9,7 @@ from sqlalchemy import exists, func, or_, select
 
 from abooker.bot.handlers.default import _format_metadata_progress
 from abooker.bot.keyboards import book_actions, search_results
+from abooker.bot.telegram_retry import with_retry
 from abooker.core.config import settings
 from abooker.core.database import get_session_factory
 from abooker.core.models import AudioFile, FileStatus, Publication, PublicationStatus, User, UserBook
@@ -362,7 +363,10 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
         return
 
     await callback.answer()
-    status_msg = await callback.message.answer("Добавляю книгу…")
+    # See bot/telegram_retry.py: this VDS's route to Telegram is
+    # intermittently flaky, and without a retry a blip on this very first
+    # call would silently drop the request before create_publication even runs.
+    status_msg = await with_retry(lambda: callback.message.answer("Добавляю книгу…"))
 
     async def on_metadata_progress(elapsed: float, diag: dict) -> None:
         try:
@@ -398,20 +402,20 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
                 f"Книга уже есть, добавлена к вашим: <b>{pub.title}</b>\n"
                 f"RSS: <code>{rss_url}</code>"
             )
-        await callback.bot.edit_message_text(
+        await with_retry(lambda: callback.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
             text=text,
             parse_mode="HTML",
             reply_markup=book_actions(pub.id, pub.slug, is_admin=is_admin, is_public=pub.is_public),
-        )
+        ))
     except Exception as exc:
         log.exception("Failed to publish from search result")
-        await callback.bot.edit_message_text(
+        await with_retry(lambda: callback.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
             text=f"Ошибка: {exc}",
-        )
+        ))
 
 
 # deferred import to avoid circular
