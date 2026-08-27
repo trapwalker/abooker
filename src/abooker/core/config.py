@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     # with elapsed time + swarm diagnostics while waiting on metadata.
     METADATA_PROGRESS_INTERVAL: float = 15.0
 
+    # On a cache miss, /file/{slug}/{path} holds the request open and polls
+    # qBittorrent's download progress instead of failing instantly: as long
+    # as progress keeps advancing the wait continues, but if it sits still
+    # for DOWNLOAD_STALL_TIMEOUT seconds straight, the request gives up with
+    # a 503 (the download itself isn't cancelled, just no longer waited on).
+    # Kept fairly short by design — most HTTP clients apply their own
+    # time-to-first-byte timeout, and we send nothing at all while waiting.
+    DOWNLOAD_STALL_TIMEOUT: float = 20.0
+    DOWNLOAD_POLL_INTERVAL: float = 1.0
+
     # When true, serve_file responds with an X-Accel-Redirect header instead
     # of streaming the file itself, offloading byte-transfer to nginx (see
     # deploy/nginx/*.conf, location /_internal_files/). Off by default so a
