@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from abooker.core.config import settings
-from abooker.core.models import AudioFile, Client, DownloadEvent, FileStatus, Publication
+from abooker.core.models import AudioFile, Client, DownloadEvent, FileStatus, Publication, PublicationStatus
 
 log = logging.getLogger(__name__)
 
@@ -265,7 +265,27 @@ async def finalize_if_complete(session: AsyncSession, pub: Publication, af: Audi
     await link_or_copy_from_qbt(pub, af)
     af.status = FileStatus.cached
     log.info("Finalized download: %s/%s", pub.slug, af.filename)
+    await _maybe_mark_ready(session, pub)
     return True
+
+
+async def _maybe_mark_ready(session: AsyncSession, pub: Publication) -> None:
+    """Flip a `warming_up` publication to `ready` once its warmup head
+    (index < WARMUP_COUNT) is fully cached. Purely informational — no route
+    gates on Publication.status, per-chapter FileStatus already does that —
+    but it's the observable "book is ready" signal the bot/status views want.
+    """
+    if pub.status != PublicationStatus.warming_up:
+        return
+    head_q = await session.execute(
+        select(AudioFile)
+        .where(AudioFile.publication_id == pub.id)
+        .where(AudioFile.index < settings.WARMUP_COUNT)
+    )
+    head = head_q.scalars().all()
+    if all(af.status == FileStatus.cached for af in head):
+        pub.status = PublicationStatus.ready
+        log.info("Publication %s finished warmup, now ready", pub.slug)
 
 
 async def finalize_downloads(session: AsyncSession) -> int:
@@ -305,6 +325,8 @@ async def finalize_downloads(session: AsyncSession) -> int:
                 log.info("Finalized download: %s/%s", pub.slug, af.filename)
             except Exception:
                 log.warning("Could not finalize %s/%s", pub.slug, af.filename, exc_info=True)
+
+        await _maybe_mark_ready(session, pub)
 
     return finalized
 
