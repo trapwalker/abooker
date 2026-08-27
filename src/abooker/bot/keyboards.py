@@ -12,10 +12,15 @@ STATUS_ICONS = {
 
 
 def book_actions(pub_id: int, slug: str, is_admin: bool = False, is_public: bool = False) -> InlineKeyboardMarkup:
+    # callback_data is capped at 64 bytes by Telegram, and slug is derived
+    # from the book title — long enough (title + author, transliterated) to
+    # blow past that on its own, which raised BUTTON_DATA_INVALID for real
+    # books. pub_id (a short int) is used for every button here instead;
+    # the handlers that used to look up by slug now look up by id.
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="RSS", callback_data=f"rss:{slug}"),
-        InlineKeyboardButton(text="Статус", callback_data=f"status:{slug}"),
+        InlineKeyboardButton(text="RSS", callback_data=f"rss:{pub_id}"),
+        InlineKeyboardButton(text="Статус", callback_data=f"status:{pub_id}"),
     )
     builder.row(
         InlineKeyboardButton(text="📖 Главы", callback_data=f"ch:{pub_id}:0"),
@@ -33,7 +38,7 @@ def book_actions(pub_id: int, slug: str, is_admin: bool = False, is_public: bool
                 InlineKeyboardButton(text="Сделать публичной", callback_data=f"toggle_public:{pub_id}"),
             )
         builder.row(
-            InlineKeyboardButton(text="Очистить кеш", callback_data=f"evict:{slug}"),
+            InlineKeyboardButton(text="Очистить кеш", callback_data=f"evict:{pub_id}"),
         )
     return builder.as_markup()
 

@@ -42,7 +42,16 @@ def run():
     from abooker.core.config import settings
     from abooker.core.log import setup_logging
     setup_logging()
-    uvicorn.run("abooker.web.main:app", host=settings.WEB_HOST, port=settings.WEB_PORT, reload=False)
+    # log_config=None: uvicorn.run() otherwise re-runs its own dictConfig on
+    # top of setup_logging(), reattaching its bundled formatter (no
+    # timestamp at all) to the "uvicorn"/"uvicorn.access" loggers — which is
+    # exactly why those lines showed up without our ISO timestamp while
+    # every other line had one. None skips that entirely, so those loggers
+    # just propagate to root and pick up our own formatter like anything else.
+    uvicorn.run(
+        "abooker.web.main:app", host=settings.WEB_HOST, port=settings.WEB_PORT,
+        reload=False, log_config=None,
+    )
 
 
 if __name__ == "__main__":

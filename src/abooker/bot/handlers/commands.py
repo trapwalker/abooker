@@ -197,18 +197,25 @@ async def cmd_search(message: Message):
 
 @router.callback_query(F.data.startswith("rss:"))
 async def cb_rss(callback: CallbackQuery):
-    slug = callback.data.split(":", 1)[1]
-    rss_url = f"{settings.WEB_BASE_URL}/rss/{slug}"
+    pub_id = int(callback.data.split(":", 1)[1])
+    factory = get_session_factory()
+    async with factory() as session:
+        pub_q = await session.execute(select(Publication).where(Publication.id == pub_id))
+        pub = pub_q.scalar_one_or_none()
+    if not pub:
+        await callback.answer("Не найдено", show_alert=True)
+        return
+    rss_url = f"{settings.WEB_BASE_URL}/rss/{pub.slug}"
     await callback.answer()
     await callback.message.answer(f"RSS: <code>{rss_url}</code>", parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("status:"))
 async def cb_pub_status(callback: CallbackQuery):
-    slug = callback.data.split(":", 1)[1]
+    pub_id = int(callback.data.split(":", 1)[1])
     factory = get_session_factory()
     async with factory() as session:
-        pub_q = await session.execute(select(Publication).where(Publication.slug == slug))
+        pub_q = await session.execute(select(Publication).where(Publication.id == pub_id))
         pub = pub_q.scalar_one_or_none()
         if not pub:
             await callback.answer("Не найдено", show_alert=True)
@@ -239,10 +246,10 @@ async def cb_evict(callback: CallbackQuery, user_role: str):
         return
 
     from abooker.cache.manager import run_eviction
-    slug = callback.data.split(":", 1)[1]
+    pub_id = int(callback.data.split(":", 1)[1])
     factory = get_session_factory()
     async with factory() as session:
-        pub_q = await session.execute(select(Publication).where(Publication.slug == slug))
+        pub_q = await session.execute(select(Publication).where(Publication.id == pub_id))
         pub = pub_q.scalar_one_or_none()
         if not pub:
             await callback.answer("Не найдено", show_alert=True)

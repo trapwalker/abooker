@@ -63,9 +63,11 @@ install:
 
 # ─── Локальная разработка ─────────────────────────────────────────────────────
 
-# Веб-сервер с hot-reload (uvicorn --reload)
+# Веб-сервер с hot-reload (uvicorn --reload). Этот путь не проходит через
+# abooker.web.main:run()/setup_logging(), поэтому формат логов задаём тем же
+# logging.yaml явным флагом — иначе тут был бы формат uvicorn по умолчанию.
 dev-web:
-	$(UV) run uvicorn abooker.web.main:app --host 0.0.0.0 --port 8000 --reload
+	$(UV) run uvicorn abooker.web.main:app --host 0.0.0.0 --port 8000 --reload --log-config src/abooker/logging.yaml
 
 # Telegram-бот
 dev-bot:
