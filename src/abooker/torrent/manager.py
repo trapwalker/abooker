@@ -145,8 +145,15 @@ async def create_publication(
             log.info("Deduplication: returning existing publication %s", existing_pub.slug)
             return existing_pub, False
 
-    # 2. List files, filter audio.
-    all_files = await qbt.get_files(torrent_hash)
+    # 2. List files, filter audio. wait_for_metadata is needed for magnet
+    #    links: qBittorrent knows the hash immediately but the file list only
+    #    arrives once metadata is fetched from peers/DHT — see its docstring.
+    all_files = await qbt.wait_for_metadata(torrent_hash)
+    if not all_files:
+        raise ValueError(
+            "Не удалось получить список файлов раздачи за 60 секунд "
+            "(нет пиров или трекер недоступен). Попробуйте ещё раз позже."
+        )
     audio_files = [f for f in all_files if _is_audio(f["name"])]
     if not audio_files:
         raise ValueError("Нет аудио-файлов в раздаче")

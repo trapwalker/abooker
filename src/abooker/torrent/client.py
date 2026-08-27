@@ -101,6 +101,27 @@ async def get_files(torrent_hash: str) -> list[dict[str, Any]]:
     return await asyncio.get_event_loop().run_in_executor(None, _get)
 
 
+async def wait_for_metadata(
+    torrent_hash: str, timeout: float = 60.0, poll: float = 1.0
+) -> list[dict[str, Any]]:
+    """Poll get_files() until qBittorrent has the torrent's file list, or timeout.
+
+    A .torrent file/URL embeds its file list, so get_files() returns it right
+    away. A magnet link only carries the info-hash — qBittorrent registers the
+    torrent immediately but the actual file list arrives later, once it has
+    fetched metadata from peers/DHT. Until then torrents_files() reports an
+    empty list, which create_publication() would otherwise misread as "no
+    audio files in this torrent". Returns the empty list if metadata never
+    arrives within `timeout`.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        files = await get_files(torrent_hash)
+        if files or asyncio.get_event_loop().time() >= deadline:
+            return files
+        await asyncio.sleep(poll)
+
+
 async def get_files_status(torrent_hash: str) -> list[dict[str, Any]]:
     """Return list of {index, name, size, progress, priority} for a torrent.
 
