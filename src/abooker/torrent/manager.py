@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from qbittorrentapi.exceptions import Conflict409Error
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -163,8 +164,26 @@ async def create_publication(
             return existing_pub, False
 
     # 1. Add torrent to qBittorrent with all files set to priority=0 (skip).
-    torrent_hash = await qbt.add_torrent_ex(source)
-    log.info("Torrent added: %s", torrent_hash)
+    try:
+        torrent_hash = await qbt.add_torrent_ex(source)
+    except Conflict409Error:
+        # qBittorrent already has a torrent with this hash — most likely an
+        # earlier failed attempt at the same magnet/.torrent that we never
+        # cleaned up there (older versions of this code didn't; a failure now
+        # does, see the except block below). Only recoverable when we can
+        # name the hash ourselves (magnet/local .torrent); an HTTP URL gives
+        # us no way to know which existing torrent it collided with.
+        if not pre_hash:
+            raise ValueError(
+                "qBittorrent сообщил о конфликте при добавлении этой раздачи "
+                "по URL, а определить её хэш заранее нельзя (это не magnet и "
+                "не локальный .torrent-файл) — нечем сопоставить с уже "
+                "существующим торрентом. Нужна ручная очистка в qBittorrent."
+            ) from None
+        torrent_hash = pre_hash
+        log.warning("Torrent add conflicted (already present in qBittorrent), reusing known hash: %s", torrent_hash)
+    else:
+        log.info("Torrent added: %s", torrent_hash)
 
     # --- Post-add deduplication (for HTTP URLs) ---
     if not pre_hash:
@@ -382,4 +401,11 @@ async def create_publication(
         await session.execute(delete(UserBook).where(UserBook.publication_id == pub_id))
         await session.execute(delete(Publication).where(Publication.id == pub_id))
         await session.commit()
+        # Also remove the torrent from qBittorrent itself — otherwise it sits
+        # there forever, and a retry of the exact same magnet/.torrent later
+        # hits Conflict409Error on re-add instead of a clean second attempt.
+        try:
+            await qbt.remove_torrent(torrent_hash)
+        except Exception:
+            log.warning("Could not remove torrent %s after failed publication", torrent_hash, exc_info=True)
         raise
