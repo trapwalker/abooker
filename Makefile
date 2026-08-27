@@ -91,7 +91,12 @@ vds-restart:
 vds-deploy:
 	rsync -avz --exclude='.venv' --exclude='__pycache__' --exclude='.git' --exclude='.env' \
 	      ./ $(VDS_HOST):$(VDS_DIR)/
+	# `ssh host "cmd"` runs a non-interactive, non-login shell that doesn't
+	# source .bashrc/.profile, so uv (installed under ~/.local/bin) isn't on
+	# PATH there even though it is in an interactive session — hence the
+	# explicit PATH prefix below.
 	ssh $(VDS_HOST) " \
+	    export PATH=\$$HOME/.local/bin:\$$PATH && \
 	    cd $(VDS_DIR) && \
 	    uv venv -q .venv --allow-existing 2>/dev/null; \
 	    uv pip install --python .venv -e '.[all]' && \
