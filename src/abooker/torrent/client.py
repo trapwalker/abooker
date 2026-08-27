@@ -1,6 +1,7 @@
 """Async wrapper around qbittorrent-api for the operations we need."""
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -101,23 +102,75 @@ async def get_files(torrent_hash: str) -> list[dict[str, Any]]:
     return await asyncio.get_event_loop().run_in_executor(None, _get)
 
 
+async def get_swarm_diagnostics(torrent_hash: str) -> dict[str, Any]:
+    """Best-effort connectivity signal for a torrent still waiting on metadata.
+
+    `dht_nodes` / `connection_status` come from qBittorrent's *global*
+    transfer state, so they say whether P2P traffic is getting out at all —
+    independent of this one torrent's swarm. That matters on hosts that
+    block torrent traffic at the network level (see the network-block-sl2
+    memory: tracker HTTPS can be blocked while peer/DHT UDP traffic is fine,
+    or vice versa) — `dht_nodes == 0` for a while is a real "network is
+    blocking this" signal, not just "this torrent is slow".
+    `num_seeds` / `num_leechs` are this torrent's own swarm as far as
+    qBittorrent has discovered so far; they can legitimately still be 0 while
+    DHT lookups are in flight.
+    """
+    def _get():
+        client = _make_client()
+        try:
+            state = dict(client.sync_maindata().get("server_state", {}))
+        except Exception:
+            state = {}
+        info = client.torrents_info(torrent_hashes=torrent_hash)
+        t = info[0] if info else None
+        return {
+            "dht_nodes": state.get("dht_nodes"),
+            "connection_status": state.get("connection_status"),
+            "num_seeds": getattr(t, "num_seeds", None) if t else None,
+            "num_leechs": getattr(t, "num_leechs", None) if t else None,
+        }
+
+    return await asyncio.get_event_loop().run_in_executor(None, _get)
+
+
 async def wait_for_metadata(
-    torrent_hash: str, timeout: float = 60.0, poll: float = 1.0
+    torrent_hash: str,
+    timeout: float = 60.0,
+    poll: float = 2.0,
+    on_progress: Callable[[float, dict[str, Any]], Awaitable[None]] | None = None,
+    progress_interval: float = 15.0,
 ) -> list[dict[str, Any]]:
     """Poll get_files() until qBittorrent has the torrent's file list, or timeout.
 
     A .torrent file/URL embeds its file list, so get_files() returns it right
     away. A magnet link only carries the info-hash — qBittorrent registers the
     torrent immediately but the actual file list arrives later, once it has
-    fetched metadata from peers/DHT. Until then torrents_files() reports an
-    empty list, which create_publication() would otherwise misread as "no
-    audio files in this torrent". Returns the empty list if metadata never
-    arrives within `timeout`.
+    fetched metadata from peers/DHT, which can take anywhere from a second to
+    several minutes depending on swarm health. Until then torrents_files()
+    reports an empty list, which create_publication() would otherwise misread
+    as "no audio files in this torrent".
+
+    If `on_progress` is given, it's awaited roughly every `progress_interval`
+    seconds with (elapsed_seconds, swarm_diagnostics) so a caller (e.g. the
+    bot) can keep the user updated instead of staring at a frozen "Добавляю
+    книгу…" for minutes. Returns the empty list if metadata never arrives
+    within `timeout` — the caller decides what that means.
     """
-    deadline = asyncio.get_event_loop().time() + timeout
+    loop = asyncio.get_event_loop()
+    start = loop.time()
+    deadline = start + timeout
+    last_report = start
     while True:
         files = await get_files(torrent_hash)
-        if files or asyncio.get_event_loop().time() >= deadline:
+        if files:
+            return files
+        now = loop.time()
+        if on_progress and now - last_report >= progress_interval:
+            diagnostics = await get_swarm_diagnostics(torrent_hash)
+            await on_progress(now - start, diagnostics)
+            last_report = now
+        if now >= deadline:
             return files
         await asyncio.sleep(poll)
 

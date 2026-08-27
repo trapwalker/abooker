@@ -26,6 +26,17 @@ def _is_url(text: str) -> bool:
     return t.startswith("http://") or t.startswith("https://")
 
 
+def _format_metadata_progress(elapsed: float, diag: dict) -> str:
+    lines = [f"Добавляю книгу… жду метаданные раздачи ({elapsed:.0f} с)"]
+    dht_nodes = diag.get("dht_nodes")
+    if dht_nodes is not None:
+        lines.append(f"DHT-узлов видно: {dht_nodes}")
+    seeds, leechs = diag.get("num_seeds"), diag.get("num_leechs")
+    if seeds is not None:
+        lines.append(f"Сидов/личей у раздачи: {seeds}/{leechs}")
+    return "\n".join(lines)
+
+
 async def _create_and_notify(
     bot: Bot,
     chat_id: int,
@@ -36,6 +47,19 @@ async def _create_and_notify(
 ):
     is_admin = user_role == "admin"
     status_msg = await bot.send_message(chat_id, "Добавляю книгу…")
+
+    async def on_metadata_progress(elapsed: float, diag: dict) -> None:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg.message_id,
+                text=_format_metadata_progress(elapsed, diag),
+            )
+        except Exception:
+            # Telegram rate limit / "message not modified" — not worth
+            # failing the whole publication for a missed status update.
+            log.debug("Could not edit status message with metadata progress", exc_info=True)
+
     try:
         factory = get_session_factory()
         async with factory() as session:
@@ -43,6 +67,7 @@ async def _create_and_notify(
                 session,
                 source,
                 user_id=db_user.id if db_user else None,
+                on_metadata_progress=on_metadata_progress,
             )
             await session.commit()
 

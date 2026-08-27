@@ -3,8 +3,10 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -72,6 +74,28 @@ def _compute_torrent_file_hash(torrent_bytes: bytes) -> str | None:
     return None
 
 
+def _format_metadata_timeout_hint(diag: dict[str, Any]) -> str:
+    """Turn swarm diagnostics into a human hint about *why* metadata never arrived."""
+    dht_nodes = diag.get("dht_nodes")
+    status = diag.get("connection_status")
+    seeds, leechs = diag.get("num_seeds"), diag.get("num_leechs")
+    if (dht_nodes is not None and dht_nodes == 0) or status == "disconnected":
+        return (
+            "DHT-узлов не видно (connection_status="
+            f"{status!r}, dht_nodes={dht_nodes}) — похоже, что P2P-трафик "
+            "заблокирован на уровне сети, а не проблема конкретной раздачи."
+        )
+    if seeds is not None and seeds == 0 and (leechs or 0) == 0:
+        return (
+            f"DHT работает (dht_nodes={dht_nodes}), но у раздачи так и не "
+            "нашлось ни одного сида — похоже, раздача мертва или очень редкая."
+        )
+    return (
+        f"dht_nodes={dht_nodes}, сидов/личей={seeds}/{leechs} — соединение "
+        "есть, но раздача отвечает медленно. Попробуйте ещё раз позже."
+    )
+
+
 async def _ensure_user_book(session: AsyncSession, user_id: int, publication_id: int) -> UserBook:
     """Create UserBook if it doesn't exist; return it either way."""
     existing = await session.execute(
@@ -94,6 +118,7 @@ async def create_publication(
     title: str | None = None,
     author: str | None = None,
     user_id: int | None = None,
+    on_metadata_progress: Callable[[float, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> tuple[Publication, bool]:
     """Add torrent, discover audio files, build RSS, persist to DB and FS.
 
@@ -103,6 +128,9 @@ async def create_publication(
         title: optional title override (defaults to torrent name).
         author: optional author metadata.
         user_id: DB User.id to associate via UserBook (optional).
+        on_metadata_progress: optional async callback(elapsed_seconds, diagnostics)
+            invoked periodically while waiting for a magnet's metadata — see
+            torrent.client.wait_for_metadata.
 
     Returns:
         (Publication, is_new) — is_new=False means deduplication occurred.
@@ -148,11 +176,18 @@ async def create_publication(
     # 2. List files, filter audio. wait_for_metadata is needed for magnet
     #    links: qBittorrent knows the hash immediately but the file list only
     #    arrives once metadata is fetched from peers/DHT — see its docstring.
-    all_files = await qbt.wait_for_metadata(torrent_hash)
+    all_files = await qbt.wait_for_metadata(
+        torrent_hash,
+        timeout=settings.METADATA_TIMEOUT,
+        on_progress=on_metadata_progress,
+        progress_interval=settings.METADATA_PROGRESS_INTERVAL,
+    )
     if not all_files:
+        diag = await qbt.get_swarm_diagnostics(torrent_hash)
+        hint = _format_metadata_timeout_hint(diag)
         raise ValueError(
-            "Не удалось получить список файлов раздачи за 60 секунд "
-            "(нет пиров или трекер недоступен). Попробуйте ещё раз позже."
+            f"Не удалось получить список файлов раздачи за "
+            f"{settings.METADATA_TIMEOUT:.0f} с. {hint}"
         )
     audio_files = [f for f in all_files if _is_audio(f["name"])]
     if not audio_files:

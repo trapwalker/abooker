@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_GB: float = 5.0
     MIN_AUDIO_RATIO: float = 0.5
 
+    # How long to wait for a magnet link's metadata (file list) to arrive from
+    # peers/DHT before giving up. .torrent files/URLs already embed it and
+    # return immediately regardless of this value. Generous by design: a slow
+    # magnet is far more common than a dead one, and the wait only holds up
+    # the one /search or link-drop that triggered it, not the whole bot.
+    METADATA_TIMEOUT: float = 300.0
+    # How often (seconds) to edit the bot's "Добавляю книгу…" status message
+    # with elapsed time + swarm diagnostics while waiting on metadata.
+    METADATA_PROGRESS_INTERVAL: float = 15.0
+
     # When true, serve_file responds with an X-Accel-Redirect header instead
     # of streaming the file itself, offloading byte-transfer to nginx (see
     # deploy/nginx/*.conf, location /_internal_files/). Off by default so a

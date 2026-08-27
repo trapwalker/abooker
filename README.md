@@ -171,3 +171,5 @@ src/abooker/
 | `BOT_TOKEN` / `BOT_ADMIN_IDS` | — | Telegram-бот и список ID администраторов |
 | `WEB_BASE_URL` | `http://localhost:8000` | Публичный URL сервера (используется в ссылках RSS) |
 | `MAX_FILE_SIZE_GB` / `MIN_AUDIO_RATIO` | `5` / `0.5` | Фильтр раздач при добавлении книги |
+| `METADATA_TIMEOUT` | `300` | Сколько секунд ждать метаданные magnet-ссылки (список файлов) от пиров/DHT |
+| `METADATA_PROGRESS_INTERVAL` | `15` | Как часто (сек) обновлять статусное сообщение бота при ожидании метаданных |
