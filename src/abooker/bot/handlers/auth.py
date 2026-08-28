@@ -145,7 +145,7 @@ async def cb_auth_approve(callback: CallbackQuery, user_role: str, bot: Bot):
                 parse_mode="HTML",
             )
         except Exception:
-            log.warning("Could not edit admin message %s/%s", admin_id_str, msg_id)
+            log.warning("Could not edit admin message %s/%s", admin_id_str, msg_id, exc_info=True)
 
     # Notify the user
     try:
@@ -154,7 +154,7 @@ async def cb_auth_approve(callback: CallbackQuery, user_role: str, bot: Bot):
             "✅ Авторизация одобрена. Теперь вы можете добавлять книги.",
         )
     except Exception:
-        log.warning("Could not notify user %s", target_user.telegram_id)
+        log.warning("Could not notify user %s", target_user.telegram_id, exc_info=True)
 
     await callback.answer("Пользователь авторизован.")
 
@@ -200,7 +200,7 @@ async def cb_auth_reject(callback: CallbackQuery, user_role: str, bot: Bot):
                 parse_mode="HTML",
             )
         except Exception:
-            log.warning("Could not edit admin message %s/%s", admin_id_str, msg_id)
+            log.warning("Could not edit admin message %s/%s", admin_id_str, msg_id, exc_info=True)
 
     # Notify the user
     if target_telegram_id:
@@ -210,6 +210,6 @@ async def cb_auth_reject(callback: CallbackQuery, user_role: str, bot: Bot):
                 "❌ В авторизации отказано.",
             )
         except Exception:
-            log.warning("Could not notify user %s", target_telegram_id)
+            log.warning("Could not notify user %s", target_telegram_id, exc_info=True)
 
     await callback.answer("Запрос отклонён.")

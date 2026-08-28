@@ -121,6 +121,7 @@ async def get_swarm_diagnostics(torrent_hash: str) -> dict[str, Any]:
         try:
             state = dict(client.sync_maindata().get("server_state", {}))
         except Exception:
+            log.debug("get_swarm_diagnostics: could not fetch server_state", exc_info=True)
             state = {}
         info = client.torrents_info(torrent_hashes=torrent_hash)
         t = info[0] if info else None
