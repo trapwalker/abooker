@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher
 from abooker.bot.handlers import chapters, commands, default
 from abooker.bot.handlers import auth
 from abooker.bot.middleware import UserMiddleware
+from abooker.bot.session import RetryingAiohttpSession
 from abooker.core.config import settings
 from abooker.core.database import cleanup_orphaned_pending, init_db, recover_from_json
 from abooker.core.log import setup_logging
@@ -19,7 +20,7 @@ async def _main():
     await recover_from_json()
     await cleanup_orphaned_pending()
 
-    bot = Bot(token=settings.BOT_TOKEN)
+    bot = Bot(token=settings.BOT_TOKEN, session=RetryingAiohttpSession())
     dp = Dispatcher()
 
     dp.update.outer_middleware(UserMiddleware())
