@@ -120,6 +120,7 @@ async def create_publication(
     author: str | None = None,
     user_id: int | None = None,
     on_metadata_progress: Callable[[float, dict[str, Any]], Awaitable[None]] | None = None,
+    on_ready: Callable[[Publication], Awaitable[None]] | None = None,
 ) -> tuple[Publication, bool]:
     """Add torrent, discover audio files, build RSS, persist to DB and FS.
 
@@ -132,6 +133,13 @@ async def create_publication(
         on_metadata_progress: optional async callback(elapsed_seconds, diagnostics)
             invoked periodically while waiting for a magnet's metadata — see
             torrent.client.wait_for_metadata.
+        on_ready: optional async callback(pub), invoked once as soon as the
+            RSS feed actually exists on disk and is servable — i.e. right
+            after metadata resolved, well before this function returns
+            (there's still warmup priorities left to set). NOT called on a
+            dedup return (existing_pub already has a working RSS, the
+            caller can just use it immediately without waiting on a
+            callback).
 
     Returns:
         (Publication, is_new) — is_new=False means deduplication occurred.
@@ -246,6 +254,14 @@ async def create_publication(
             timeout=settings.METADATA_TIMEOUT,
             on_progress=on_metadata_progress,
             progress_interval=settings.METADATA_PROGRESS_INTERVAL,
+            # Deliberately faster than wait_for_metadata's own 2.0s default:
+            # every file sits at qBittorrent's default priority (1, Normal)
+            # for as long as this poll takes to notice metadata resolved
+            # (see resume_torrent's docstring) — libtorrent's piece-picker
+            # can and does start pulling scattered pieces from files we
+            # never intended to touch yet in that window. A tighter poll
+            # doesn't close the window, just shrinks it.
+            poll=0.5,
         )
         if not all_files:
             diag = await qbt.get_swarm_diagnostics(torrent_hash)
@@ -366,6 +382,15 @@ async def create_publication(
             author=pub.author,
         )
         (pub_dir / "playlist.rss").write_bytes(rss_bytes)
+
+        # RSS is servable right now (slug/title/total_files are final, the
+        # file exists on disk) — let the caller notify immediately instead
+        # of waiting for warmup priorities to be set below too.
+        if on_ready:
+            try:
+                await on_ready(pub)
+            except Exception:
+                log.warning("on_ready callback failed for %s", slug, exc_info=True)
 
         # 12. Write publication.json for crash-recovery.
         pub_json = {

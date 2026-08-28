@@ -7,12 +7,11 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import exists, func, or_, select
 
-from abooker.bot.handlers.default import _format_metadata_progress
+from abooker.bot.formatting import format_metadata_progress, format_ready_text, status_line
 from abooker.bot.keyboards import book_actions, search_results
-from abooker.bot.telegram_retry import with_retry
 from abooker.core.config import settings
 from abooker.core.database import get_session_factory
-from abooker.core.models import AudioFile, FileStatus, Publication, PublicationStatus, User, UserBook
+from abooker.core.models import AudioFile, FileStatus, Publication, User, UserBook
 from abooker.format import fmt_bytes as _fmt_bytes
 from abooker.search.jackett import NoIndexersConfigured
 from abooker.search.jackett import search as jackett_search
@@ -20,12 +19,6 @@ from abooker.search.jackett import search as jackett_search
 log = logging.getLogger(__name__)
 
 router = Router()
-
-_STATUS_LABEL = {
-    PublicationStatus.pending_metadata: "⏳ ждём метаданные",
-    PublicationStatus.warming_up: "🔥 прогревается",
-    PublicationStatus.ready: None,  # normal state, no badge needed
-}
 
 # In-memory store for last search results (keyed by chat_id) for callback handling.
 _last_search: dict[int, list[dict]] = {}
@@ -110,11 +103,9 @@ async def cmd_list(message: Message, user_role: str, db_user: User | None):
     for pub in pubs:
         rss_url = f"{settings.WEB_BASE_URL}/rss/{pub.slug}"
         public_label = " 🌐" if pub.is_public else ""
-        status_label = _STATUS_LABEL.get(pub.status)
-        status_line = f"\n{status_label}" if status_label else ""
         text = (
             f"<b>{pub.title}</b>{public_label}\n"
-            f"Файлов: {pub.total_files} | RSS: <code>{rss_url}</code>{status_line}"
+            f"Файлов: {pub.total_files} | RSS: <code>{rss_url}</code>{status_line(pub)}"
         )
         await message.answer(
             text,
@@ -194,50 +185,6 @@ async def cmd_search(message: Message):
 
 
 # --- Callback handlers ---
-
-@router.callback_query(F.data.startswith("rss:"))
-async def cb_rss(callback: CallbackQuery):
-    pub_id = int(callback.data.split(":", 1)[1])
-    factory = get_session_factory()
-    async with factory() as session:
-        pub_q = await session.execute(select(Publication).where(Publication.id == pub_id))
-        pub = pub_q.scalar_one_or_none()
-    if not pub:
-        await callback.answer("Не найдено", show_alert=True)
-        return
-    rss_url = f"{settings.WEB_BASE_URL}/rss/{pub.slug}"
-    await callback.answer()
-    await callback.message.answer(f"RSS: <code>{rss_url}</code>", parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("status:"))
-async def cb_pub_status(callback: CallbackQuery):
-    pub_id = int(callback.data.split(":", 1)[1])
-    factory = get_session_factory()
-    async with factory() as session:
-        pub_q = await session.execute(select(Publication).where(Publication.id == pub_id))
-        pub = pub_q.scalar_one_or_none()
-        if not pub:
-            await callback.answer("Не найдено", show_alert=True)
-            return
-
-        cached_q = await session.execute(
-            select(func.count(), func.sum(AudioFile.size_bytes))
-            .where(AudioFile.publication_id == pub.id)
-            .where(AudioFile.status == FileStatus.cached)
-        )
-        cached_count, cached_size = cached_q.one()
-
-    status_label = _STATUS_LABEL.get(pub.status)
-    status_line = f"\n{status_label}" if status_label else ""
-    text = (
-        f"<b>{pub.title}</b>\n"
-        f"Файлов: {pub.total_files}\n"
-        f"Кеш: {cached_count or 0} ({_fmt_bytes(cached_size or 0)}){status_line}"
-    )
-    await callback.answer()
-    await callback.message.answer(text, parse_mode="HTML")
-
 
 @router.callback_query(F.data.startswith("evict:"))
 async def cb_evict(callback: CallbackQuery, user_role: str):
@@ -370,20 +317,33 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
         return
 
     await callback.answer()
-    # See bot/telegram_retry.py: this VDS's route to Telegram is
-    # intermittently flaky, and without a retry a blip on this very first
-    # call would silently drop the request before create_publication even runs.
-    status_msg = await with_retry(lambda: callback.message.answer("Добавляю книгу…"))
+    status_msg = await callback.message.answer("Добавляю книгу…")
+    is_admin = user_role == "admin"
+    delivered_ready = False
 
     async def on_metadata_progress(elapsed: float, diag: dict) -> None:
         try:
             await callback.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text=_format_metadata_progress(elapsed, diag),
+                text=format_metadata_progress(elapsed, diag),
             )
         except Exception:
             log.debug("Could not edit status message with metadata progress", exc_info=True)
+
+    async def on_ready(pub: Publication) -> None:
+        nonlocal delivered_ready
+        try:
+            await callback.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg.message_id,
+                text=format_ready_text(pub, is_new=True),
+                parse_mode="HTML",
+                reply_markup=book_actions(pub.id, pub.slug, is_admin=is_admin, is_public=pub.is_public),
+            )
+            delivered_ready = True
+        except Exception:
+            log.warning("Could not deliver ready notification for %s", pub.slug, exc_info=True)
 
     try:
         factory = get_session_factory()
@@ -394,35 +354,25 @@ async def cb_publish_idx(callback: CallbackQuery, user_role: str, db_user: User 
                 title=results[idx].get("title"),
                 user_id=db_user.id if db_user else None,
                 on_metadata_progress=on_metadata_progress,
+                on_ready=on_ready,
             )
             await session.commit()
 
-        rss_url = f"{settings.WEB_BASE_URL}/rss/{pub.slug}"
-        is_admin = user_role == "admin"
-        if is_new:
-            text = (
-                f"Книга добавлена: <b>{pub.title}</b>\n"
-                f"RSS: <code>{rss_url}</code>"
+        if not delivered_ready:
+            await callback.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg.message_id,
+                text=format_ready_text(pub, is_new=is_new),
+                parse_mode="HTML",
+                reply_markup=book_actions(pub.id, pub.slug, is_admin=is_admin, is_public=pub.is_public),
             )
-        else:
-            text = (
-                f"Книга уже есть, добавлена к вашим: <b>{pub.title}</b>\n"
-                f"RSS: <code>{rss_url}</code>"
-            )
-        await with_retry(lambda: callback.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=status_msg.message_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=book_actions(pub.id, pub.slug, is_admin=is_admin, is_public=pub.is_public),
-        ))
     except Exception as exc:
         log.exception("Failed to publish from search result")
-        await with_retry(lambda: callback.bot.edit_message_text(
+        await callback.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
             text=f"Ошибка: {exc}",
-        ))
+        )
 
 
 # deferred import to avoid circular

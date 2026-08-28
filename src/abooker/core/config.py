@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     METADATA_TIMEOUT: float = 300.0
     # How often (seconds) to edit the bot's "Добавляю книгу…" status message
     # with elapsed time + swarm diagnostics while waiting on metadata.
-    METADATA_PROGRESS_INTERVAL: float = 15.0
+    METADATA_PROGRESS_INTERVAL: float = 5.0
 
     # On a cache miss, /file/{slug}/{path} holds the request open and polls
     # qBittorrent's download progress instead of failing instantly: as long

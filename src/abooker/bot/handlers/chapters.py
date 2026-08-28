@@ -6,8 +6,10 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from sqlalchemy import select
 
+from abooker.bot.formatting import status_line
 from abooker.bot.keyboards import CHAPTERS_PER_PAGE, book_actions, chapter_list
 from abooker.cache.manager import estimate_eta_seconds, evict_file, warmup_file
+from abooker.core.config import settings
 from abooker.core.database import get_session_factory
 from abooker.core.models import AudioFile, FileStatus, Publication, User, UserBook
 from abooker.format import fmt_bytes, fmt_duration
@@ -204,9 +206,11 @@ async def cb_chapters_back(callback: CallbackQuery, user_role: str, db_user: Use
 
     await callback.answer()
     is_admin = user_role == "admin"
+    rss_url = f"{settings.WEB_BASE_URL}/rss/{pub.slug}"
     text = (
         f"<b>{pub.title}</b>\n"
-        f"Файлов: {pub.total_files}"
+        f"RSS: <code>{rss_url}</code>\n"
+        f"Файлов: {pub.total_files}{status_line(pub)}"
     )
     try:
         await callback.message.edit_text(
