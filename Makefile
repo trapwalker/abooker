@@ -90,8 +90,13 @@ vds-restart:
 	ssh $(VDS_HOST) "sudo systemctl restart abooker-web abooker-bot"
 
 # Залить текущий код (без .env — он не в репозитории и не трогается) и перезапустить.
+# --exclude-from=.gitignore instead of a hand-maintained list: caught us out
+# once already — a local scratch `tmp/` dir (gitignored, so invisible to git
+# status) wasn't in the old hardcoded exclude list and got rsynced to the
+# VDS wholesale, 12MB of test mp3 included. Whatever's gitignored shouldn't
+# get deployed either, on the same reasoning, without maintaining two lists.
 vds-deploy:
-	rsync -avz --exclude='.venv' --exclude='__pycache__' --exclude='.git' --exclude='.env' \
+	rsync -avz --exclude-from='.gitignore' --exclude='.git' --exclude='.env' \
 	      ./ $(VDS_HOST):$(VDS_DIR)/
 	# `ssh host "cmd"` runs a non-interactive, non-login shell that doesn't
 	# source .bashrc/.profile, so uv (installed under ~/.local/bin) isn't on
