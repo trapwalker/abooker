@@ -127,9 +127,14 @@ vds-docker-logs:
 # abooker-bot/abooker-web on the VDS are native systemd services, not Docker
 # containers (see deploy/DEPLOY.md) — this streams `journalctl -u <unit> -f`
 # over SSH, which is the equivalent of `docker logs -f` for them.
+#
+# -o cat drops journald's own "Aug 28 01:48:14 abooker-bot[1271381]:" prefix.
+# Every line we emit already carries its own ISO timestamp (logging.yaml) —
+# without -o cat you'd see that timestamp *and* journald's own non-ISO one
+# on every line, which is confusing, not just redundant.
 
 log_bot_remote:
-	ssh $(srv) "sudo journalctl -u abooker-bot -f --no-hostname"
+	ssh $(srv) "sudo journalctl -u abooker-bot -f -o cat"
 
 log_srv_remote:
-	ssh $(srv) "sudo journalctl -u abooker-web -f --no-hostname"
+	ssh $(srv) "sudo journalctl -u abooker-web -f -o cat"
