@@ -153,7 +153,10 @@ async def create_publication(
         try:
             pre_hash = _compute_torrent_file_hash(Path(source).read_bytes())
         except Exception:
-            pass
+            # Falls back to post-add dedup below — but if this file is
+            # unreadable/corrupt, the imminent add_torrent_ex(source) call
+            # is about to hit the same problem, so it's worth a trace now.
+            log.debug("Could not precompute hash for local .torrent %s", source, exc_info=True)
 
     # Both dedup checks exclude pending_metadata rows: those are another
     # in-flight attempt at the same torrent that hasn't resolved a real
@@ -428,6 +431,25 @@ async def create_publication(
                 af.status = FileStatus.downloading
             except Exception:
                 log.warning("Could not set priority for file %s", r["filename"], exc_info=True)
+
+        # 14. Discard any stray bytes libtorrent grabbed for files outside
+        #     the warmup head during the metadata-wait window (see the
+        #     poll=0.5 comment above) — harmless to lose (a real warmup
+        #     later just re-downloads them), but confusing to look at: the
+        #     chapter list would show an hourglass with a stalled percentage
+        #     for a chapter nobody asked for and nothing is still fetching.
+        warmup_qbt_indices = {r["qbt_file_index"] for r in file_records[: settings.WARMUP_COUNT]}
+        try:
+            statuses = await qbt.get_files_status(torrent_hash)
+        except Exception:
+            statuses = []
+            log.warning("Could not check for stray partial downloads for %s", slug, exc_info=True)
+        for s in statuses:
+            if s["progress"] > 0 and s["index"] not in warmup_qbt_indices:
+                af = next((a for a in audio_orm if a.qbt_file_index == s["index"]), None)
+                if af is not None:
+                    from abooker.cache.manager import discard_partial_download
+                    await discard_partial_download(pub, af)
 
         log.info("Publication created: %s (%d files)", slug, len(file_records))
         return pub, True

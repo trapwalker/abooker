@@ -1,4 +1,5 @@
-"""Per-chapter cache management: list chapters with status, warm up / evict one at a time."""
+"""Per-chapter cache management: list chapters with status, one button per
+chapter that warms up / cancels / evicts depending on its current state."""
 import logging
 import math
 
@@ -8,7 +9,7 @@ from sqlalchemy import select
 
 from abooker.bot.formatting import status_line
 from abooker.bot.keyboards import CHAPTERS_PER_PAGE, book_actions, chapter_list
-from abooker.cache.manager import estimate_eta_seconds, evict_file, warmup_file
+from abooker.cache.manager import cancel_chapter_download, estimate_eta_seconds, evict_file, warmup_file
 from abooker.core.config import settings
 from abooker.core.database import get_session_factory
 from abooker.core.models import AudioFile, FileStatus, Publication, User, UserBook
@@ -46,12 +47,10 @@ async def _render_page(pub_id: int, page: int) -> tuple[str, object] | None:
         chapters = af_q.scalars().all()
 
         progress_by_qbt_idx: dict[int, float] = {}
-        speed = 0
         if pub.torrent_hash:
             try:
                 statuses = await qbt.get_files_status(pub.torrent_hash)
                 progress_by_qbt_idx = {s["index"]: s["progress"] for s in statuses}
-                speed = await qbt.get_torrent_speed(pub.torrent_hash)
             except Exception:
                 log.warning("Could not fetch qBittorrent status for %s", pub.slug, exc_info=True)
 
@@ -64,36 +63,24 @@ async def _render_page(pub_id: int, page: int) -> tuple[str, object] | None:
         cached_count = sum(1 for c in chapters if c.status == FileStatus.cached)
         cached_size = sum(c.size_bytes for c in chapters if c.status == FileStatus.cached)
 
-        lines = [
-            f"<b>{pub.title}</b>",
-            f"Глав {total}, в кеше {cached_count} ({fmt_bytes(cached_size)})",
-            "",
-        ]
+        text = (
+            f"<b>{pub.title}</b>{status_line(pub)}\n"
+            f"Глав {total}, в кеше {cached_count} ({fmt_bytes(cached_size)})"
+        )
 
         keyboard_rows = []
         for c in page_chapters:
             live_progress = progress_by_qbt_idx.get(c.qbt_file_index) if c.qbt_file_index is not None else None
-            status = c.status.value if hasattr(c.status, "value") else str(c.status)
-
-            if status == "cached" or (live_progress is not None and live_progress >= 1.0):
-                icon = "✅"
-                suffix = fmt_bytes(c.size_bytes)
-            elif status == "downloading" or (live_progress and live_progress > 0):
-                icon = "⏳"
-                pct = live_progress or 0.0
-                remaining = c.size_bytes * (1.0 - pct)
-                eta_str = fmt_duration(remaining / speed) if speed > 0 else "оценка недоступна"
-                suffix = f"{pct:.0%}, ETA {eta_str}"
+            if c.status == FileStatus.cached or (live_progress is not None and live_progress >= 1.0):
+                status = "cached"
+            elif c.status == FileStatus.downloading or (live_progress and live_progress > 0):
                 status = "downloading"
             else:
-                icon = "⬜"
-                suffix = fmt_bytes(c.size_bytes)
                 status = "pending"
+            keyboard_rows.append({
+                "index": c.index, "status": status, "progress": live_progress, "size_bytes": c.size_bytes,
+            })
 
-            lines.append(f"{icon} Глава {c.index + 1} — {suffix}")
-            keyboard_rows.append({"index": c.index, "status": status, "progress": live_progress})
-
-        text = "\n".join(lines)
         keyboard = chapter_list(pub_id, keyboard_rows, page, total_pages)
         return text, keyboard
 
@@ -106,9 +93,13 @@ async def _show_page(callback: CallbackQuery, pub_id: int, page: int) -> None:
     text, keyboard = result
     try:
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-    except Exception:
-        # Message unchanged (e.g. same content re-rendered) — Telegram rejects identical edits.
-        pass
+    except Exception as exc:
+        # Telegram rejects an edit whose text+markup is byte-for-byte
+        # identical to what's already shown ("message is not modified") —
+        # expected and harmless when nothing actually changed since the
+        # last render. Anything else is worth knowing about.
+        if "message is not modified" not in str(exc).lower():
+            log.warning("Could not render chapter page %d for publication %d", page, pub_id, exc_info=True)
 
 
 @router.callback_query(F.data.startswith("ch:"))
@@ -131,8 +122,12 @@ async def cb_chapters_noop(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("chw:"))
-async def cb_chapter_warmup(callback: CallbackQuery, user_role: str, db_user: User | None):
+@router.callback_query(F.data.startswith("cht:"))
+async def cb_chapter_toggle(callback: CallbackQuery, user_role: str, db_user: User | None):
+    """One button, three states: ⬜ warms up, ⏳ cancels (discarding partial
+    bytes), ✅ evicts. Which action applies is decided from the *live*
+    state (DB status + qBittorrent's current progress), same as how the
+    button was rendered, so a tap always does what the button just showed."""
     _, pub_id_s, idx_s = callback.data.split(":")
     pub_id, idx = int(pub_id_s), int(idx_s)
 
@@ -144,50 +139,37 @@ async def cb_chapter_warmup(callback: CallbackQuery, user_role: str, db_user: Us
 
         pub_q = await session.execute(select(Publication).where(Publication.id == pub_id))
         pub = pub_q.scalar_one_or_none()
-        af = await warmup_file(session, pub_id, idx)
-        if af is None:
+        af_q = await session.execute(
+            select(AudioFile).where(AudioFile.publication_id == pub_id, AudioFile.index == idx)
+        )
+        af = af_q.scalar_one_or_none()
+        if pub is None or af is None:
             await callback.answer("Глава не найдена", show_alert=True)
             return
 
-        if af.status == FileStatus.cached:
+        live_progress = 0.0
+        if af.qbt_file_index is not None:
+            try:
+                live_progress = await qbt.get_download_progress(pub.torrent_hash, af.qbt_file_index)
+            except Exception:
+                log.warning("Could not fetch live progress for %s/%s", pub.slug, af.filename, exc_info=True)
+
+        if af.status == FileStatus.cached or live_progress >= 1.0:
+            await evict_file(session, pub_id, idx)
             await session.commit()
-            await callback.answer("Уже в кеше ✅")
+            await callback.answer("Удалено из кеша 🗑")
+        elif af.status == FileStatus.downloading or live_progress > 0:
+            await cancel_chapter_download(session, pub_id, idx)
+            await session.commit()
+            await callback.answer("Закачка отменена")
         else:
-            progress = 0.0
-            if af.qbt_file_index is not None:
-                try:
-                    progress = await qbt.get_download_progress(pub.torrent_hash, af.qbt_file_index)
-                except Exception:
-                    pass
-            eta = await estimate_eta_seconds(pub, af, progress)
+            af = await warmup_file(session, pub_id, idx)
+            eta = await estimate_eta_seconds(pub, af, 0.0) if af else None
             await session.commit()
             msg = "Поставлено на закачку 🔥"
             if eta is not None:
                 msg += f" (≈ {fmt_duration(eta)})"
             await callback.answer(msg)
-
-    # Find current page for this chapter to re-render it.
-    page = idx // CHAPTERS_PER_PAGE
-    await _show_page(callback, pub_id, page)
-
-
-@router.callback_query(F.data.startswith("chd:"))
-async def cb_chapter_evict(callback: CallbackQuery, user_role: str, db_user: User | None):
-    _, pub_id_s, idx_s = callback.data.split(":")
-    pub_id, idx = int(pub_id_s), int(idx_s)
-
-    factory = get_session_factory()
-    async with factory() as session:
-        if not await _can_manage(session, pub_id, user_role, db_user):
-            await callback.answer("Недостаточно прав.", show_alert=True)
-            return
-
-        af = await evict_file(session, pub_id, idx)
-        await session.commit()
-        if af is None:
-            await callback.answer("Глава не найдена", show_alert=True)
-            return
-        await callback.answer("Удалено из кеша 🗑")
 
     page = idx // CHAPTERS_PER_PAGE
     await _show_page(callback, pub_id, page)
@@ -218,5 +200,6 @@ async def cb_chapters_back(callback: CallbackQuery, user_role: str, db_user: Use
             parse_mode="HTML",
             reply_markup=book_actions(pub.id, pub.slug, is_admin=is_admin, is_public=pub.is_public),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            log.warning("Could not render book card for publication %d", pub_id, exc_info=True)

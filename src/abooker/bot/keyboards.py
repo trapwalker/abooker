@@ -1,7 +1,10 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-CHAPTERS_PER_PAGE = 12
+from abooker.format import fmt_bytes
+
+CHAPTERS_PER_PAGE = 40
+CHAPTERS_PER_ROW = 4
 
 STATUS_ICONS = {
     "pending": "⬜",
@@ -17,11 +20,10 @@ def book_actions(pub_id: int, slug: str, is_admin: bool = False, is_public: bool
     # blow past that on its own, which raised BUTTON_DATA_INVALID for real
     # books. pub_id (a short int) is used for every button here instead;
     # the handlers that used to look up by slug now look up by id.
+    # No RSS/Статус buttons — that text is already inline in the message
+    # (see bot/formatting.py:format_ready_text), so there's nothing left
+    # for a button to do here.
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="RSS", callback_data=f"rss:{pub_id}"),
-        InlineKeyboardButton(text="Статус", callback_data=f"status:{pub_id}"),
-    )
     builder.row(
         InlineKeyboardButton(text="📖 Главы", callback_data=f"ch:{pub_id}:0"),
     )
@@ -44,22 +46,26 @@ def book_actions(pub_id: int, slug: str, is_admin: bool = False, is_public: bool
 
 
 def chapter_list(pub_id: int, chapters: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
-    """chapters: list of {index, status: 'pending'|'downloading'|'cached'|'evicted'} for the current page."""
+    """chapters: list of {index, status: 'pending'|'downloading'|'cached', progress, size_bytes}
+    for the current page. One button per chapter, not three — tapping it
+    does whatever makes sense for its current state (see
+    handlers/chapters.py:cb_chapter_toggle):
+      ⬜ N · size   -> starts the download (becomes ⏳)
+      ⏳ N NN%      -> cancels it, discards the partial bytes (becomes ⬜)
+      ✅ N · size   -> evicts it from cache (becomes ⬜)
+    """
     builder = InlineKeyboardBuilder()
     for ch in chapters:
         idx = ch["index"]
         status = ch["status"]
         icon = STATUS_ICONS.get(status, "⬜")
-        label = f"{icon} Глава {idx + 1}"
-        if status == "downloading":
-            pct = ch.get("progress")
-            if pct is not None:
-                label += f" ({pct:.0%})"
-        builder.row(
-            InlineKeyboardButton(text=label, callback_data=f"chnoop:{pub_id}"),
-            InlineKeyboardButton(text="🔥", callback_data=f"chw:{pub_id}:{idx}"),
-            InlineKeyboardButton(text="🗑", callback_data=f"chd:{pub_id}:{idx}"),
-        )
+        label = f"{icon} {idx + 1}"
+        if status == "downloading" and ch.get("progress") is not None:
+            label += f" {ch['progress']:.0%}"
+        elif ch.get("size_bytes") is not None:
+            label += f" · {fmt_bytes(ch['size_bytes'])}"
+        builder.button(text=label, callback_data=f"cht:{pub_id}:{idx}")
+    builder.adjust(CHAPTERS_PER_ROW)
 
     nav_row = []
     if page > 0:

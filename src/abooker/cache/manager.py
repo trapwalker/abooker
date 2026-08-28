@@ -167,7 +167,11 @@ async def _evict_one(pub: Publication, af: AudioFile, qbt) -> None:
         try:
             await qbt.set_file_priority(pub.torrent_hash, af.qbt_file_index, 0)
         except Exception:
-            pass
+            # Not fatal — the file's bytes are already gone from files/ above,
+            # so eviction is done from the listener's point of view — but
+            # qBittorrent may keep this file at whatever priority it had
+            # (possibly still actively downloading it) until this is retried.
+            log.warning("Could not set priority=0 for %s/%s during eviction", pub.slug, af.filename, exc_info=True)
 
 
 async def warmup_file(session: AsyncSession, publication_id: int, file_index: int) -> AudioFile | None:
@@ -211,6 +215,18 @@ async def evict_file(session: AsyncSession, publication_id: int, file_index: int
     return af
 
 
+def _locate_in_save_path(save_path: str, source_name: str) -> Path | None:
+    """Find a torrent file inside qBittorrent's save path by its recorded
+    relative path, falling back to a name-only search across the whole save
+    path (qBittorrent occasionally reports/uses a slightly different layout
+    than af.source_path, e.g. when a torrent has no root folder)."""
+    direct = Path(save_path) / source_name
+    if direct.exists():
+        return direct
+    candidates = list(Path(save_path).rglob(Path(source_name).name))
+    return candidates[0] if candidates else None
+
+
 async def link_or_copy_from_qbt(pub: Publication, af: AudioFile) -> Path:
     """Locate a finished download inside qBittorrent's save path and expose it
     under DATA_DIR/{slug}/files/{af.filename} (our numbering-prefixed alias;
@@ -232,11 +248,7 @@ async def link_or_copy_from_qbt(pub: Publication, af: AudioFile) -> Path:
         raise RuntimeError(f"qBittorrent has no save path for torrent {pub.torrent_hash}")
 
     source_name = af.source_path or af.filename
-    src = Path(save_path) / source_name
-    if not src.exists():
-        candidates = list(Path(save_path).rglob(Path(source_name).name))
-        src = candidates[0] if candidates else None
-
+    src = _locate_in_save_path(save_path, source_name)
     if not (src and src.exists()):
         raise RuntimeError(f"Cannot locate downloaded file {source_name} in qBittorrent save path")
 
@@ -246,6 +258,60 @@ async def link_or_copy_from_qbt(pub: Publication, af: AudioFile) -> Path:
     except OSError:
         shutil.copy2(src, dest)
     return dest
+
+
+async def discard_partial_download(pub: Publication, af: AudioFile) -> None:
+    """Best-effort delete of a chapter's not-yet-complete bytes directly from
+    qBittorrent's save path — there's no WebAPI call for "discard just this
+    file's data", only whole-torrent priority/removal. Used both by the
+    manual cancel action (chapters.cb_chapter_toggle, the hourglass state)
+    and by the stray-download cleanup right after a magnet's metadata
+    resolves (torrent.manager.create_publication) — safe to call on a file
+    that was never actually downloaded, it's just a no-op then.
+    """
+    from abooker.torrent import client as qbt
+
+    if af.qbt_file_index is None:
+        return
+    try:
+        save_path = await qbt.get_torrent_save_path(pub.torrent_hash)
+        if not save_path:
+            return
+        src = _locate_in_save_path(save_path, af.source_path or af.filename)
+        if src and src.exists():
+            src.unlink()
+            log.info("Discarded partial download: %s/%s", pub.slug, af.filename)
+    except Exception:
+        log.warning("Could not discard partial download for %s/%s", pub.slug, af.filename, exc_info=True)
+
+
+async def cancel_chapter_download(session: AsyncSession, publication_id: int, file_index: int) -> AudioFile | None:
+    """Manually cancel an in-progress download (bot chapter-toggle button,
+    hourglass state) — stop it and discard whatever partial bytes exist,
+    back to a clean "not downloaded" state rather than leaving a stalled,
+    half-downloaded file with priority 0 sitting around."""
+    from abooker.torrent import client as qbt
+
+    pub_q = await session.execute(select(Publication).where(Publication.id == publication_id))
+    pub = pub_q.scalar_one_or_none()
+    af_q = await session.execute(
+        select(AudioFile)
+        .where(AudioFile.publication_id == publication_id)
+        .where(AudioFile.index == file_index)
+    )
+    af = af_q.scalar_one_or_none()
+    if pub is None or af is None:
+        return af
+
+    if af.qbt_file_index is not None:
+        try:
+            await qbt.set_file_priority(pub.torrent_hash, af.qbt_file_index, 0)
+        except Exception:
+            log.warning("Could not set priority=0 for %s/%s while cancelling", pub.slug, af.filename, exc_info=True)
+
+    await discard_partial_download(pub, af)
+    af.status = FileStatus.pending
+    return af
 
 
 async def finalize_if_complete(session: AsyncSession, pub: Publication, af: AudioFile) -> bool:
